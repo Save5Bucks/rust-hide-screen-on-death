@@ -1,0 +1,59 @@
+{
+  "name": "rust-obs-scene-toggle",
+  "version": "0.1.0",
+  "description": "Electron app to switch OBS scenes for Rust (map/death).",
+  "main": "src/main/main.js",
+  "author": "",
+  "license": "MIT",
+  "scripts": {
+    "start": "node scripts/start.js",
+    "build": "npm run rebuild",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder",
+    "dist:appx": "electron-builder --win appx",
+    "lint": "echo 'no lint configured'",
+    "rebuild": "node scripts/rebuild.js"
+  },
+  "dependencies": {
+    "electron-store": "^8.1.0",
+    "obs-websocket-js": "^5.0.6"
+  },
+  "devDependencies": {
+    "electron": "^38.4.0",
+    "electron-builder": "^26.0.12",
+    "@electron/rebuild": "^3.6.1",
+    "cross-env": "^7.0.3"
+  },
+  "optionalDependencies": {},
+  "build": {
+    "appId": "com.example.rustobs",
+    "productName": "Rust OBS Scene Toggle",
+    "files": [
+      "dist/**",
+      "src/**",
+      "assets/**",
+      "package.json"
+    ],
+    "asar": true,
+    "directories": {
+      "buildResources": "build",
+      "output": "dist"
+    },
+    "win": {
+      "target": [
+        { "target": "nsis", "arch": ["x64"] },
+        { "target": "appx", "arch": ["x64"] }
+      ],
+      "icon": "build/icon.ico"
+    },
+    "appx": {
+      "identityName": "YourPublisher.RustOBSSceneToggle",
+      "publisherDisplayName": "Your Publisher Name",
+      "publisher": "CN=00000000-0000-0000-0000-000000000000",
+      "backgroundColor": "#1e1e1e",
+      "displayName": "Rust OBS Scene Toggle",
+      "applicationId": "RustOBSSceneToggle",
+      "capabilities": ["internetClient"]
+    }
+  }
+}

@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en" data-bs-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; img-src 'self' data: blob:; font-src 'self' https://cdn.jsdelivr.net data:; connect-src 'self' ws: wss:; media-src 'self' blob:;">
+    <title>Rust OBS Scene Toggle</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" crossorigin="anonymous">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet" crossorigin="anonymous">
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body class="bg-body">
+    <nav class="navbar navbar-dark bg-dark border-bottom border-secondary">
+      <div class="container-fluid">
+        <span class="navbar-brand mb-0 h1">
+          <i class="bi bi-broadcast-pin me-2"></i>Rust OBS Scene Toggle
+        </span>
+        <div class="d-flex align-items-center gap-2">
+          <span class="badge rounded-pill text-bg-secondary" id="obsStatus">Disconnected</span>
+        </div>
+      </div>
+    </nav>
+
+    <main class="container-fluid py-3">
+      <div class="row g-3">
+        <!-- OBS Connection -->
+        <div class="col-12 col-xl-6">
+          <div class="card shadow-sm h-100">
+            <div class="card-header d-flex align-items-center gap-2">
+              <i class="bi bi-plug"></i>
+              <span>OBS Connection</span>
+            </div>
+            <div class="card-body">
+              <div class="row g-3 align-items-end">
+                <div class="col-12 col-md-4">
+                  <label class="form-label">Host</label>
+                  <input id="host" class="form-control" value="127.0.0.1" />
+                </div>
+                <div class="col-6 col-md-3">
+                  <label class="form-label">Port</label>
+                  <input id="port" class="form-control" type="number" value="4455" />
+                </div>
+                <div class="col-6 col-md-3">
+                  <label class="form-label">Password</label>
+                  <input id="password" class="form-control" type="password" />
+                </div>
+                <div class="col-12 col-md-2 d-flex flex-column gap-2">
+                  <button id="connect" class="btn btn-success w-100">
+                    <i class="bi bi-cloud-check me-1"></i><span id="connectLabel">Connect</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Scenes -->
+        <div class="col-12 col-xl-6">
+          <div class="card shadow-sm h-100">
+            <div class="card-header d-flex align-items-center gap-2">
+              <i class="bi bi-collection-play"></i>
+              <span>Scenes</span>
+            </div>
+            <div class="card-body">
+              <div class="d-flex gap-2 mb-3">
+                <button id="refreshScenes" class="btn btn-primary">
+                  <i class="bi bi-arrow-clockwise me-1"></i>Refresh Scenes
+                </button>
+              </div>
+              <div class="row g-3">
+                <div class="col-12 col-md-4">
+                  <label class="form-label">Live</label>
+                  <select id="sceneLive" class="form-select"></select>
+                </div>
+                <div class="col-12 col-md-4">
+                  <label class="form-label">Map</label>
+                  <select id="sceneMap" class="form-select"></select>
+                </div>
+                <div class="col-12 col-md-4">
+                  <label class="form-label">Death</label>
+                  <select id="sceneDeath" class="form-select"></select>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Monitoring -->
+        <div class="col-12">
+          <div class="card shadow-sm">
+            <div class="card-header d-flex align-items-center gap-2">
+              <i class="bi bi-activity"></i>
+              <span>Monitoring</span>
+              <span class="ms-auto small text-secondary">Status: <span class="badge rounded-pill text-bg-secondary" id="monStatus">Idle</span></span>
+            </div>
+            <div class="card-body">
+              <div class="d-flex flex-wrap gap-2 mb-3">
+                <button id="startMonitoring" class="btn btn-success">
+                  <i class="bi bi-play-fill me-1"></i>Start
+                </button>
+                <button id="stopMonitoring" class="btn btn-outline-light">
+                  <i class="bi bi-stop-fill me-1"></i>Stop
+                </button>
+                <button id="pickScreen" class="btn btn-outline-primary">
+                  <i class="bi bi-display me-1"></i>Pick Screen
+                </button>
+                <button id="selectROI" class="btn btn-warning">
+                  <i class="bi bi-bounding-box-circles me-1"></i>Select Death ROI
+                </button>
+                <button id="selectMapROI" class="btn btn-warning">
+                  <i class="bi bi-bounding-box-circles me-1"></i>Select Map ROI
+                </button>
+                <button id="clearROI" class="btn btn-outline-light">
+                  <i class="bi bi-eraser-fill me-1"></i>Clear ROI
+                </button>
+                <span class="align-self-center text-secondary">ROI: <span id="roiStatus">No ROI set</span></span>
+                <span class="align-self-center text-secondary ms-auto">iohook: <span class="badge text-bg-dark" id="iohookStatus">Unknown</span></span>
+              </div>
+
+              <div class="row g-3 align-items-start">
+                <div class="col-12 col-lg-8">
+                  <div class="ratio ratio-16x9 preview-wrap rounded overflow-hidden border border-secondary">
+                    <video id="screenVideo" autoplay muted playsinline class="d-none"></video>
+                    <canvas id="preview" class="w-100 h-100 bg-dark"></canvas>
+                  </div>
+                </div>
+                <div class="col-12 col-lg-4">
+                  <div class="list-group list-group-flush">
+                    <div class="list-group-item bg-transparent text-light d-flex justify-content-between align-items-center">
+                      <span><i class="bi bi-heartbreak me-2 text-danger"></i>Death detection</span>
+                      <span id="deathDetectStatus" class="badge text-bg-secondary">Off</span>
+                    </div>
+                    <div class="list-group-item bg-transparent text-light d-flex justify-content-between align-items-center">
+                      <span><i class="bi bi-map me-2 text-info"></i>Map detection</span>
+                      <span id="mapDetectStatus" class="badge text-bg-secondary">Off</span>
+                    </div>
+                    <div class="list-group-item bg-transparent text-light">
+                      <small class="text-secondary">Tip: Select a stable area (e.g., the DEAD header). The app will match your ROI every ~500ms.</small>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Log Panel -->
+      <div class="row g-3 mt-1">
+        <div class="col-12">
+          <div class="card shadow-sm">
+            <div class="card-header d-flex align-items-center gap-2">
+              <i class="bi bi-terminal"></i>
+              <span>Log</span>
+              <button id="saveLog" class="btn btn-sm btn-primary ms-auto">Save Log</button>
+              <button id="clearLog" class="btn btn-sm btn-outline-light">Clear</button>
+            </div>
+            <div class="card-body">
+              <pre id="log" class="mb-0" style="height:160px; overflow:auto; background:#0b0c0f; border:1px solid rgba(255,255,255,.08); padding:8px; border-radius:4px;"></pre>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js" crossorigin="anonymous"></script>
+    <script src="renderer.js"></script>
+  </body>
+  </html>

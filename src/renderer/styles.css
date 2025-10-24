@@ -1,0 +1,15 @@
+:root {
+  --card-bg: #141416;
+}
+
+.navbar-dark { background: #0e0f10 !important; }
+.card { background-color: var(--card-bg); }
+.card-header { background-color: rgba(255,255,255,0.03); }
+.preview-wrap { background: #0c0d0f; }
+
+/* Make canvas fill the ratio container */
+#preview { display:block; width:100% !important; height:100% !important; }
+
+/* Tweak list-group in dark */
+.list-group-item { border-color: rgba(255,255,255,0.08); }
+

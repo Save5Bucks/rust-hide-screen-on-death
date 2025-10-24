@@ -1,0 +1,40 @@
+OBS Studio Plugin
+
+Electron application
+
+Features
+- Connects to OBS Studio via WebSocket to control streaming and recording features.
+- Need to toggle scene when death screen appears.
+- Need to toggle scene when map button is pressed.
+
+Technical Details
+- Map key is "G"
+- Map key is pressed down when map screen is open, released when closed. Not a toggle on off.
+
+Client Requirements.
+- Monitor screen for death screen appearance to send scene toggle commands to OBS Studio.
+- Monitor G key state to send scene toggle commands to OBS Studio.
+- Simple UI to start/stop monitoring and configure OBS Studio connection settings.
+
+Server Requirements.
+- OBS Studio with WebSocket plugin installed and configured.
+- Compatible Python script to handle WebSocket communication with OBS Studio.
+
+UI
+- Get scene names from OBS Studio to allow user to select which scenes to toggle to on death screen and map screen.
+- Start/stop monitoring button.
+- Connection settings for OBS Studio WebSocket (IP, port, password).
+- Status indicator showing connection status to OBS Studio and monitoring status.
+- Use Python with libraries like `obs-websocket-py` for OBS communication and `pynput` for key monitoring.
+
+Image Reference
+- Rust_Death_Screen.png
+
+Requirements
+- Electron for desktop application.
+- Python for OBS WebSocket communication and key monitoring.
+
+System Architecture
+- Should work for a 1 pc setup or a 2 pc setup where OBS is on a different machine.
+- Electron app handles UI and user interactions.
+- Python script runs in the background to monitor key states and communicate with OBS Studio.
