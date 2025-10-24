@@ -10,7 +10,6 @@
     "build": "npm run rebuild",
     "pack": "electron-builder --dir",
     "dist": "electron-builder",
-    "dist:appx": "electron-builder --win appx",
     "lint": "echo 'no lint configured'",
     "rebuild": "node scripts/rebuild.js"
   },
@@ -43,18 +42,9 @@
     },
     "win": {
       "target": [
-        { "target": "nsis", "arch": ["x64"] },
-        { "target": "appx", "arch": ["x64"] }
+        { "target": "nsis", "arch": ["x64"] }
       ],
       "icon": "build/icon.ico"
-    },
-    "appx": {
-      "identityName": "FlinnBuilt.RustOBSSceneToggle",
-      "publisherDisplayName": "Flinn Built",
-      "publisher": "CN=00000000-0000-0000-0000-000000000000",
-      "backgroundColor": "#1e1e1e",
-      "displayName": "Rust OBS Scene Toggle",
-      "applicationId": "RustOBSSceneToggle"
     }
   }
 }

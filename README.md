@@ -27,16 +27,7 @@ Global Key Monitoring (Map key)
 - The app attempts to load `iohook` to capture the G key while Rust is in focus. If `iohook` is not installed, the UI will note this and only death detection will function. To enable it: `npm i iohook` (requires native build tools). Key code is currently hard-coded to G.
 
 Packaging
-- Uses `electron-builder`. Common commands:
-  - `npm run dist` – creates platform installers
-  - `npm run dist:appx` – builds an AppX for Microsoft Store submission
-
-Windows Store (AppX)
-- Adjust `build.appx` fields in `package.json`:
-  - `publisher` (CN=... GUID or cert subject)
-  - `identityName` and `publisherDisplayName`
-  - Provide icons at `build/icon.ico`
-- After building the AppX, sign it with a certificate that matches the publisher, then submit through Partner Center.
+- Uses `electron-builder`. Run `npm run dist` to create the NSIS installer for Windows.
 
 Files
 - `src/main/*` – main process, OBS client, preload, key monitoring.
