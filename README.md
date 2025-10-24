@@ -1,5 +1,7 @@
 Rust OBS Scene Toggle Helper (Electron)
 
+[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-support-yellow?logo=buy-me-a-coffee)](https://buymeacoffee.com/save5bucks)
+
 Overview
 - Electron app that talks to OBS via obs-websocket and switches scenes when either:
   - The Rust map key (G) is held down (via optional global key hook).
