@@ -1,6 +1,7 @@
 Rust OBS Scene Toggle Helper (Electron)
 
 [![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-support-yellow?logo=buy-me-a-coffee)](https://buymeacoffee.com/save5bucks)
+[![Watch Tutorial](https://img.shields.io/badge/YouTube-Watch%20Tutorial-red?logo=youtube)](https://youtu.be/Q_JPHWbQ25c)
 
 ## 🎮 Protect Your Rust Base from Stream Snipers
 
