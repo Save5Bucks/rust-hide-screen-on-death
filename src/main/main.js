@@ -11,7 +11,8 @@ const store = new Store({
     deathTemplate: null, // {roi:{x,y,w,h}, imageData: base64}
     monitoring: false,
     autoConnect: true,
-    autoMonitor: true
+    autoMonitor: true,
+    respawnDelay: 200 // milliseconds delay before returning to live scene
   }
 });
 
@@ -262,8 +263,12 @@ ipcMain.on('monitor:mapOpenSwitch', async () => {
 });
 ipcMain.on('monitor:mapClosedSwitch', async () => {
   const cfg = store.get('scenes');
+  const delay = store.get('respawnDelay') || 200;
   if (cfg && cfg.live) {
-    try { await obs.switchScene(cfg.live); } catch (_) {}
+    // Delay before returning to live to prevent coordinate leaks
+    setTimeout(async () => {
+      try { await obs.switchScene(cfg.live); } catch (_) {}
+    }, delay);
   }
 });
 

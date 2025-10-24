@@ -49,10 +49,11 @@ This Electron app monitors your screen and communicates with OBS to automaticall
 2. Enter your OBS connection details (host: localhost, port: 4455, password)
 3. Click **Connect** and **Refresh Scenes**
 4. Select your Live, Death, and Map scenes from the dropdowns
-5. Click **Select Death ROI From Screen** while on the Rust death screen
-6. Draw a rectangle over a stable part of the death UI (like the skull icon)
-7. Click **Start Monitoring**
-8. Minimize to system tray and start streaming safely!
+5. **Set Respawn Delay** (default: 200ms) - Prevents coordinate leaks by adding a buffer before returning to Live scene
+6. Click **Select Death ROI From Screen** while on the Rust death screen
+7. Draw a rectangle over a stable part of the death UI (like the skull icon)
+8. Click **Start Monitoring**
+9. Minimize to system tray and start streaming safely!
 
 ## 🛠️ Developer Setup
 
@@ -121,6 +122,18 @@ For developers who want to build from source:
 - To enable: Install Visual Studio Build Tools, then run `npm i iohook`
 - Alternatively, rely on death detection only (most streamers prefer this)
 
+**Q: What is Respawn Delay and why do I need it?**
+- The app may detect your respawn faster than the game clears the screen
+- Without a delay, coordinates/location might briefly flash on stream during the transition
+- Default 200ms delay provides a safe buffer to ensure the game UI has fully transitioned
+- Adjust higher (300-500ms) if you still see brief flashes
+- Adjust lower (100-150ms) if the delay feels too long
+
+**Q: My coordinates/location still show briefly when I respawn?**
+- Increase the Respawn Delay value (try 300ms or 500ms)
+- The app works faster than the game UI transitions
+- Higher delay = more protection, but slightly longer scene switch
+
 ### Performance Issues
 
 **Q: App causing lag or high CPU usage?**
@@ -133,6 +146,7 @@ For developers who want to build from source:
 - Check your OBS websocket connection is stable
 - Reduce the number of sources in your scenes
 - The switch happens within 1-2 seconds of detection (normal latency)
+- Note: The Respawn Delay (200ms default) adds a buffer before returning to Live - this is intentional!
 
 ### General Questions
 

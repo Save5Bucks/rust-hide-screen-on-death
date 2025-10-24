@@ -88,6 +88,7 @@ const iohookStatusEl = $('iohookStatus');
 const sceneLiveEl = $('sceneLive');
 const sceneMapEl = $('sceneMap');
 const sceneDeathEl = $('sceneDeath');
+const respawnDelayEl = $('respawnDelay');
 
 const videoEl = $('screenVideo');
 const canvasEl = $('preview');
@@ -247,6 +248,7 @@ async function loadConfig() {
   hostEl.value = obs.host || '127.0.0.1';
   portEl.value = (obs.port ?? 4455);
   passEl.value = obs.password || '';
+  respawnDelayEl.value = cfg.respawnDelay ?? 200;
   const deathTemplate = cfg.deathTemplate || null;
   roi = deathTemplate && deathTemplate.roi ? deathTemplate.roi : null;
   roiStatusEl.textContent = roi ? `x:${roi.x}, y:${roi.y}, w:${roi.w}, h:${roi.h}` : 'No ROI set';
@@ -317,9 +319,16 @@ function updateSceneSelection() {
   saveConfigPartial({ scenes: { live: sceneLiveEl.value, map: sceneMapEl.value, death: sceneDeathEl.value } });
 }
 
+function updateRespawnDelay() {
+  const delay = parseInt(respawnDelayEl.value, 10) || 200;
+  saveConfigPartial({ respawnDelay: delay });
+  log(`Respawn delay set to ${delay}ms`);
+}
+
 sceneLiveEl.addEventListener('change', updateSceneSelection);
 sceneMapEl.addEventListener('change', updateSceneSelection);
 sceneDeathEl.addEventListener('change', updateSceneSelection);
+respawnDelayEl.addEventListener('change', updateRespawnDelay);
 
 const connectBtn = $('connect');
 const refreshBtn = $('refreshScenes');
