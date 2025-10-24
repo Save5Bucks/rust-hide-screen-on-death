@@ -2,7 +2,11 @@ Rust OBS Scene Toggle Helper (Electron)
 
 [![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-support-yellow?logo=buy-me-a-coffee)](https://buymeacoffee.com/save5bucks)
 
-Overview
+## Installation
+
+**Easy Installation:** Download the latest installer from the [Releases page](https://github.com/Save5Bucks/rust-hide-screen-on-death/releases) and run the setup executable.
+
+## Overview
 - Electron app that talks to OBS via obs-websocket and switches scenes when either:
   - The Rust map key (G) is held down (via optional global key hook).
   - The Rust death screen is detected on your monitor using a user-selected screen ROI.
@@ -39,3 +43,6 @@ Files
 Notes
 - This repo started from an idea to prototype the workflow. We can extend with better template matching (OpenCV.js), configurable key capture, and polished UI.
 
+## License
+
+MIT License - See [LICENSE](LICENSE) file for details.
