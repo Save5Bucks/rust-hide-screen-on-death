@@ -3,11 +3,12 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; img-src 'self' data: blob:; font-src 'self' https://cdn.jsdelivr.net data:; connect-src 'self' ws: wss:; media-src 'self' blob:;">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://docs.opencv.org https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; img-src 'self' data: blob:; font-src 'self' https://cdn.jsdelivr.net data:; connect-src 'self' ws://localhost:* ws://127.0.0.1:* wss://localhost:* wss://127.0.0.1:* https://docs.opencv.org https://cdn.jsdelivr.net; media-src 'self' blob:;">
     <title>Rust OBS Scene Toggle</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" crossorigin="anonymous">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet" crossorigin="anonymous">
     <link rel="stylesheet" href="styles.css" />
+    <script async src="https://docs.opencv.org/4.x/opencv.js" onload="console.log('OpenCV.js script loaded')"></script>
   </head>
   <body class="bg-body">
     <nav class="navbar navbar-dark bg-dark border-bottom border-secondary">
@@ -16,7 +17,9 @@
           <i class="bi bi-broadcast-pin me-2"></i>Rust OBS Scene Toggle
         </span>
         <div class="d-flex align-items-center gap-2">
-          <span class="badge rounded-pill text-bg-secondary" id="obsStatus">Disconnected</span>
+          <button class="btn btn-outline-light btn-sm" data-bs-toggle="modal" data-bs-target="#helpModal" title="Setup Instructions">
+            <i class="bi bi-question-circle"></i>
+          </button>
         </div>
       </div>
     </nav>
@@ -29,20 +32,36 @@
             <div class="card-header d-flex align-items-center gap-2">
               <i class="bi bi-plug"></i>
               <span>OBS Connection</span>
+              <span class="ms-auto small text-secondary">Status: <span class="badge rounded-pill text-bg-secondary" id="obsStatus">Disconnected</span></span>
             </div>
             <div class="card-body">
               <div class="row g-3 align-items-end">
                 <div class="col-12 col-md-4">
                   <label class="form-label">Host</label>
-                  <input id="host" class="form-control" value="127.0.0.1" />
+                  <div class="input-group">
+                    <input id="host" class="form-control" type="password" value="127.0.0.1" />
+                    <button class="btn btn-outline-secondary" type="button" onclick="toggleVisibility('host')" title="Show/Hide">
+                      <i class="bi bi-eye" id="host-icon"></i>
+                    </button>
+                  </div>
                 </div>
                 <div class="col-6 col-md-3">
                   <label class="form-label">Port</label>
-                  <input id="port" class="form-control" type="number" value="4455" />
+                  <div class="input-group">
+                    <input id="port" class="form-control" type="password" value="4455" />
+                    <button class="btn btn-outline-secondary" type="button" onclick="toggleVisibility('port')" title="Show/Hide">
+                      <i class="bi bi-eye" id="port-icon"></i>
+                    </button>
+                  </div>
                 </div>
                 <div class="col-6 col-md-3">
                   <label class="form-label">Password</label>
-                  <input id="password" class="form-control" type="password" />
+                  <div class="input-group">
+                    <input id="password" class="form-control" type="password" />
+                    <button class="btn btn-outline-secondary" type="button" onclick="toggleVisibility('password')" title="Show/Hide">
+                      <i class="bi bi-eye" id="password-icon"></i>
+                    </button>
+                  </div>
                 </div>
                 <div class="col-12 col-md-2 d-flex flex-column gap-2">
                   <button id="connect" class="btn btn-success w-100">
@@ -88,33 +107,57 @@
         <!-- Monitoring -->
         <div class="col-12">
           <div class="card shadow-sm">
-            <div class="card-header d-flex align-items-center gap-2">
+            <div class="card-header d-flex align-items-center gap-2 flex-wrap">
               <i class="bi bi-activity"></i>
               <span>Monitoring</span>
               <span class="ms-auto small text-secondary">Status: <span class="badge rounded-pill text-bg-secondary" id="monStatus">Idle</span></span>
+              <span class="small text-secondary">iohook: <span class="badge rounded-pill text-bg-dark" id="iohookStatus">Unknown</span></span>
+              <span class="small text-secondary">OpenCV: <span class="badge rounded-pill text-bg-secondary" id="opencvStatus">Loading...</span></span>
+              <span class="small text-secondary">Template: <span class="badge rounded-pill text-bg-secondary" id="templateStatus">Not loaded</span></span>
             </div>
             <div class="card-body">
               <div class="d-flex flex-wrap gap-2 mb-3">
                 <button id="startMonitoring" class="btn btn-success">
-                  <i class="bi bi-play-fill me-1"></i>Start
+                  <i class="bi bi-play-fill me-1"></i>Start Monitoring
                 </button>
                 <button id="stopMonitoring" class="btn btn-outline-light">
                   <i class="bi bi-stop-fill me-1"></i>Stop
                 </button>
-                <button id="pickScreen" class="btn btn-outline-primary">
-                  <i class="bi bi-display me-1"></i>Pick Screen
-                </button>
                 <button id="selectROI" class="btn btn-warning">
                   <i class="bi bi-bounding-box-circles me-1"></i>Select Death ROI
-                </button>
-                <button id="selectMapROI" class="btn btn-warning">
-                  <i class="bi bi-bounding-box-circles me-1"></i>Select Map ROI
                 </button>
                 <button id="clearROI" class="btn btn-outline-light">
                   <i class="bi bi-eraser-fill me-1"></i>Clear ROI
                 </button>
-                <span class="align-self-center text-secondary">ROI: <span id="roiStatus">No ROI set</span></span>
-                <span class="align-self-center text-secondary ms-auto">iohook: <span class="badge text-bg-dark" id="iohookStatus">Unknown</span></span>
+              </div>
+
+              <div class="d-flex flex-wrap gap-3 mb-3 text-secondary small">
+                <span>ROI: <span id="roiStatus">No ROI set</span></span>
+                <span>Resolution: <span id="resolutionStatus">--</span></span>
+              </div>
+
+              <div class="row g-3 mb-2">
+                <div class="col-12 col-lg-4">
+                  <label class="form-label">Monitor</label>
+                  <select id="monitorSelect" class="form-select"></select>
+                </div>
+                <div class="col-12 col-lg-5">
+                  <label class="form-label">ROI Percent (X Y W H)</label>
+                  <div class="input-group">
+                    <span class="input-group-text">X</span>
+                    <input id="roiPx" type="number" class="form-control" value="0" min="0" max="100">
+                    <span class="input-group-text">Y</span>
+                    <input id="roiPy" type="number" class="form-control" value="0" min="0" max="100">
+                    <span class="input-group-text">W</span>
+                    <input id="roiPw" type="number" class="form-control" value="20" min="1" max="100">
+                    <span class="input-group-text">H</span>
+                    <input id="roiPh" type="number" class="form-control" value="15" min="1" max="100">
+                  </div>
+                </div>
+                <div class="col-12 col-lg-3">
+                  <label class="form-label">Threshold</label>
+                  <input id="thresh" type="range" class="form-range" min="50" max="99" value="85">
+                </div>
               </div>
 
               <div class="row g-3 align-items-start">
@@ -131,11 +174,11 @@
                       <span id="deathDetectStatus" class="badge text-bg-secondary">Off</span>
                     </div>
                     <div class="list-group-item bg-transparent text-light d-flex justify-content-between align-items-center">
-                      <span><i class="bi bi-map me-2 text-info"></i>Map detection</span>
-                      <span id="mapDetectStatus" class="badge text-bg-secondary">Off</span>
+                      <span><i class="bi bi-graph-up me-2 text-success"></i>Match score</span>
+                      <span id="matchScore" class="badge text-bg-dark">--</span>
                     </div>
                     <div class="list-group-item bg-transparent text-light">
-                      <small class="text-secondary">Tip: Select a stable area (e.g., the DEAD header). The app will match your ROI every ~500ms.</small>
+                      <small class="text-secondary">Tip: Drag to select the DEAD text area. The template will be captured automatically and matched every ~400ms.</small>
                     </div>
                   </div>
                 </div>
@@ -162,6 +205,103 @@
         </div>
       </div>
     </main>
+
+    <!-- Help Modal -->
+    <div class="modal fade" id="helpModal" tabindex="-1" aria-labelledby="helpModalLabel" aria-hidden="true">
+      <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title" id="helpModalLabel">
+              <i class="bi bi-question-circle me-2"></i>Setup Instructions
+            </h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+          </div>
+          <div class="modal-body">
+            <div class="alert alert-info">
+              <i class="bi bi-info-circle me-2"></i>
+              <strong>Follow these steps to set up automatic death detection and scene switching in OBS</strong>
+            </div>
+
+            <h6 class="fw-bold mt-4"><i class="bi bi-1-circle me-2"></i>Enable OBS WebSocket</h6>
+            <ol class="mb-4">
+              <li>Open OBS Studio</li>
+              <li>Go to <strong>Tools → WebSocket Server Settings</strong></li>
+              <li>Check <strong>"Enable WebSocket server"</strong></li>
+              <li>Note the <strong>Port</strong> (default: 4455) and <strong>Password</strong> if set</li>
+              <li>Click <strong>OK</strong></li>
+            </ol>
+
+            <h6 class="fw-bold mt-4"><i class="bi bi-2-circle me-2"></i>Connect to OBS</h6>
+            <ol class="mb-4">
+              <li>In this app, enter the <strong>Host</strong> (usually 127.0.0.1)</li>
+              <li>Enter the <strong>Port</strong> (default: 4455)</li>
+              <li>Enter the <strong>Password</strong> if you set one in OBS</li>
+              <li>Click <strong>"Connect"</strong> button</li>
+              <li>Status badge should turn <span class="badge bg-success">Connected</span></li>
+            </ol>
+
+            <h6 class="fw-bold mt-4"><i class="bi bi-3-circle me-2"></i>Configure Scenes</h6>
+            <ol class="mb-4">
+              <li>Click <strong>"Refresh Scenes"</strong> to load your OBS scenes</li>
+              <li>Select <strong>Live Scene</strong> - your normal gameplay scene</li>
+              <li>Select <strong>Map Scene</strong> - scene to show when G key is pressed (optional)</li>
+              <li>Select <strong>Death Scene</strong> - scene to show when you die in Rust</li>
+            </ol>
+
+            <h6 class="fw-bold mt-4"><i class="bi bi-4-circle me-2"></i>Select Monitor</h6>
+            <ol class="mb-4">
+              <li>Choose your <strong>game monitor</strong> from the dropdown</li>
+              <li>This selection is saved automatically</li>
+            </ol>
+
+            <h6 class="fw-bold mt-4"><i class="bi bi-5-circle me-2"></i>Start Screen Capture</h6>
+            <ol class="mb-4">
+              <li>Click <strong>"Start Monitoring"</strong> button</li>
+              <li>Your screen will be captured for death detection</li>
+              <li>The video preview shows your selected monitor</li>
+            </ol>
+
+            <h6 class="fw-bold mt-4"><i class="bi bi-6-circle me-2"></i>Select Death ROI (Region of Interest)</h6>
+            <ol class="mb-4">
+              <li>Click <strong>"Select Death ROI"</strong> button</li>
+              <li>Click and drag over the <strong>"DEAD"</strong> text on the Rust death screen</li>
+              <li>Release to capture the template</li>
+              <li>Badge should show <span class="badge bg-success">Captured</span></li>
+              <li><strong>This is saved automatically</strong> - you only need to do this once!</li>
+            </ol>
+
+            <h6 class="fw-bold mt-4"><i class="bi bi-7-circle me-2"></i>Adjust Detection Settings</h6>
+            <ol class="mb-4">
+              <li>Use the <strong>Threshold slider</strong> to adjust sensitivity (default: 85%)</li>
+              <li>Higher = more strict (fewer false positives)</li>
+              <li>Lower = more sensitive (may trigger false positives)</li>
+              <li>Watch the <strong>Match Score</strong> badge while testing</li>
+            </ol>
+
+            <h6 class="fw-bold mt-4"><i class="bi bi-check-circle me-2"></i>How It Works</h6>
+            <ul class="mb-4">
+              <li><strong>Death Detection:</strong> When you die in Rust, the app detects the "DEAD" text and switches to your Death scene. When you respawn, it automatically returns to Live scene.</li>
+              <li><strong>G Key (Map):</strong> Press and hold G to switch to Map scene. Release G to return to Live scene. (G key is disabled while in Death scene)</li>
+              <li><strong>Persistence:</strong> Your monitor, ROI, and template are saved automatically. On restart, everything loads and works immediately!</li>
+            </ul>
+
+            <div class="alert alert-warning">
+              <i class="bi bi-exclamation-triangle me-2"></i>
+              <strong>Troubleshooting:</strong>
+              <ul class="mb-0">
+                <li>If death detection doesn't work, try lowering the threshold or re-capturing the ROI</li>
+                <li>Make sure the "DEAD" text is clearly visible when you capture the ROI</li>
+                <li>Check the Match Score badge to see detection accuracy in real-time</li>
+                <li>If G key doesn't work, make sure iohook badge shows <span class="badge bg-success">Available</span></li>
+              </ul>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-primary" data-bs-dismiss="modal">Got it!</button>
+          </div>
+        </div>
+      </div>
+    </div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js" crossorigin="anonymous"></script>
     <script src="renderer.js"></script>

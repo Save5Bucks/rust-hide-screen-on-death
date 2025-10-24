@@ -1,0 +1,38 @@
+# Dependencies
+node_modules/
+package-lock.json
+
+# Build output
+dist/
+build/
+
+# Electron
+out/
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Environment & Config
+.env
+.env.local
+config.json
+
+# Dev folder (private scripts, notes, etc)
+dev/
+
+# User data (generated at runtime)
+*.electron-store

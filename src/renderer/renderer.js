@@ -1,6 +1,46 @@
+// Toggle visibility for password fields - must be global for onclick handlers
+window.toggleVisibility = function(fieldId) {
+  console.log('toggleVisibility called with fieldId:', fieldId);
+  
+  const field = document.getElementById(fieldId);
+  const icon = document.getElementById(fieldId + '-icon');
+  
+  console.log('Field element:', field);
+  console.log('Icon element:', icon);
+  console.log('Current field type:', field ? field.type : 'N/A');
+  console.log('Current icon class:', icon ? icon.className : 'N/A');
+  
+  if (!field || !icon) {
+    console.error('toggleVisibility: Field or icon not found for', fieldId);
+    return;
+  }
+  
+  if (field.type === 'password') {
+    field.type = 'text';
+    icon.className = 'bi bi-eye-slash';
+    console.log('Changed to TEXT (visible)');
+  } else {
+    field.type = 'password';
+    icon.className = 'bi bi-eye';
+    console.log('Changed to PASSWORD (hidden)');
+  }
+  
+  console.log('New field type:', field.type);
+  console.log('New icon class:', icon.className);
+};
+
+console.log('toggleVisibility function defined on window:', typeof window.toggleVisibility);
+
 if (!window.__rendererLoaded) { window.__rendererLoaded = true;
 
 const $ = (id) => document.getElementById(id);
+
+// Configuration constants
+const DEATH_DETECT_INTERVAL_MS = 400;
+const DEATH_DETECT_COOLDOWN_MS = 2000;
+const DEFAULT_THRESHOLD_PERCENT = 85;
+const MAX_PORT_NUMBER = 65535;
+const MIN_PORT_NUMBER = 1;
 
 // Graceful fallback if preload failed
 const api = window.api || {
@@ -41,9 +81,9 @@ const passEl = $('password');
 const obsStatusEl = $('obsStatus');
 const monStatusEl = $('monStatus');
 const roiStatusEl = $('roiStatus');
+const resolutionStatusEl = $('resolutionStatus');
 const deathDetectStatusEl = $('deathDetectStatus');
 const iohookStatusEl = $('iohookStatus');
-const mapDetectStatusEl = document.getElementById('mapDetectStatus');
 
 const sceneLiveEl = $('sceneLive');
 const sceneMapEl = $('sceneMap');
@@ -52,6 +92,122 @@ const sceneDeathEl = $('sceneDeath');
 const videoEl = $('screenVideo');
 const canvasEl = $('preview');
 const ctx = canvasEl.getContext('2d');
+
+// Update resolution display when video metadata loads
+videoEl.addEventListener('loadedmetadata', () => {
+  const vw = videoEl.videoWidth;
+  const vh = videoEl.videoHeight;
+  if (resolutionStatusEl && vw && vh) {
+    resolutionStatusEl.textContent = `${vw}x${vh}`;
+    log(`Video resolution: ${vw}x${vh}`);
+  }
+  
+  // Update ROI percent inputs if ROI is loaded
+  if (roi && vw && vh) {
+    const roiPxInput = $('roiPx');
+    const roiPyInput = $('roiPy');
+    const roiPwInput = $('roiPw');
+    const roiPhInput = $('roiPh');
+    if (roiPxInput) roiPxInput.value = Math.round((roi.x / vw) * 100);
+    if (roiPyInput) roiPyInput.value = Math.round((roi.y / vh) * 100);
+    if (roiPwInput) roiPwInput.value = Math.round((roi.w / vw) * 100);
+    if (roiPhInput) roiPhInput.value = Math.round((roi.h / vh) * 100);
+  }
+});
+
+// OpenCV template matching state
+let templateMat = null;
+let tplReady = false;
+let cooldownUntil = 0;
+let cvReady = false;
+let cv = null;
+
+// Screen capture state
+let mediaStream = null;
+let selectedSourceId = null; // Persisted screen source
+let inDeathScene = false; // Track if we switched to death scene (prevent auto-switch back)
+
+// Initialize OpenCV when available
+function initOpenCV() {
+  if (window.cv && window.cv.getBuildInformation) {
+    cv = window.cv;
+    cvReady = true;
+    log('OpenCV.js initialized successfully');
+    setBadge($('opencvStatus'), 'Ready', 'success');
+    
+    // Restore template if we have saved data
+    restoreTemplate();
+    
+    return true;
+  }
+  return false;
+}
+
+// Restore template from config if available
+function restoreTemplate() {
+  if (!cfg || !cvReady || !cv) return;
+  
+  const deathTemplate = cfg.deathTemplate || null;
+  if (deathTemplate && deathTemplate.templateData) {
+    try {
+      const { width, height, data } = deathTemplate.templateData;
+      const buffer = new Uint8Array(atob(data).split('').map(c => c.charCodeAt(0)));
+      
+      if (templateMat) templateMat.delete();
+      templateMat = cv.matFromArray(height, width, cv.CV_8UC1, buffer);
+      tplReady = true;
+      setBadge($('templateStatus'), 'Loaded from config', 'success');
+      log(`Template restored: ${width}x${height} from config`);
+    } catch (err) {
+      log('Failed to restore template: ' + (err && err.message ? err.message : String(err)));
+      setBadge($('templateStatus'), 'Restore Failed', 'warning');
+    }
+  }
+}
+
+// Wait for OpenCV to load
+async function waitForCV() {
+  if (cvReady) return true;
+  setBadge($('opencvStatus'), 'Loading...', 'warning');
+  return new Promise((resolve) => {
+    const check = () => {
+      if (initOpenCV()) {
+        resolve(true);
+      } else {
+        setTimeout(check, 200);
+      }
+    };
+    check();
+  });
+}
+let monitorSources = [];
+
+// Input validation functions
+function validatePort(port) {
+  const num = Number(port);
+  if (isNaN(num) || num < MIN_PORT_NUMBER || num > MAX_PORT_NUMBER) {
+    log(`Warning: Invalid port ${port}. Must be between ${MIN_PORT_NUMBER} and ${MAX_PORT_NUMBER}`);
+    return false;
+  }
+  return true;
+}
+
+function validateROI(x, y, w, h) {
+  if (x < 0 || y < 0 || w <= 0 || h <= 0) {
+    log('Warning: Invalid ROI coordinates. All values must be positive and width/height > 0');
+    return false;
+  }
+  return true;
+}
+
+function validateThreshold(thresh) {
+  const num = Number(thresh);
+  if (isNaN(num) || num < 0 || num > 100) {
+    log('Warning: Invalid threshold. Must be between 0 and 100');
+    return false;
+  }
+  return true;
+}
 
 // Simple logger to on-page panel (falls back to console)
 const logEl = document.getElementById('log');
@@ -64,7 +220,10 @@ function log(msg) {
     } else {
       console.log(msg);
     }
-  } catch (_) { console.log(msg); }
+  } catch (err) { 
+    console.log(msg); 
+    console.error('Logging error:', err);
+  }
 }
 
 function populateScenes(list) {
@@ -91,6 +250,9 @@ async function loadConfig() {
   const deathTemplate = cfg.deathTemplate || null;
   roi = deathTemplate && deathTemplate.roi ? deathTemplate.roi : null;
   roiStatusEl.textContent = roi ? `x:${roi.x}, y:${roi.y}, w:${roi.w}, h:${roi.h}` : 'No ROI set';
+  
+  // Restore selected screen source
+  selectedSourceId = cfg.selectedSourceId || null;
 }
 
 async function saveConfigPartial(patch) {
@@ -107,6 +269,13 @@ async function connectOBS() {
     updateConnectButton();
     return;
   }
+  
+  // Validate port before connecting
+  if (!validatePort(portEl.value)) {
+    setBadge(obsStatusEl, 'Invalid Port', 'danger');
+    return;
+  }
+  
   setBadge(obsStatusEl, 'Connecting', 'warning');
   try {
     const res = await api.connectOBS({ host: hostEl.value, port: Number(portEl.value), password: passEl.value });
@@ -178,9 +347,13 @@ pickScreenBtn && pickScreenBtn.addEventListener('click', async () => {
     }).catch(e => { log('getUserMedia(screen) error: ' + e.message); return null; });
     if (stream) {
       mediaStream = stream; videoEl.srcObject = mediaStream; detecting = true;
-      if (thumbTimer) { clearInterval(thumbTimer); thumbTimer = null; }
       if (detectTimer) clearInterval(detectTimer);
-      detectTimer = setInterval(processFrame, 500);
+      detectTimer = setInterval(processFrame, DEATH_DETECT_INTERVAL_MS);
+      
+      // Save selected source
+      selectedSourceId = screen.id;
+      await saveConfigPartial({ selectedSourceId: screen.id });
+      
       log('Using selected source: ' + (screen.name || screen.id));
       setBadge(deathDetectStatusEl, roi ? 'Armed' : 'No ROI', roi ? 'warning' : 'secondary');
     } else {
@@ -188,6 +361,113 @@ pickScreenBtn && pickScreenBtn.addEventListener('click', async () => {
     }
   } catch (e) { log('pickScreen error: ' + (e && e.message ? e.message : String(e))); }
 });
+
+// Template capture and loading buttons
+const captureTplBtn = $('captureTemplate');
+const loadTplInput = $('loadTemplate');
+
+if (captureTplBtn) {
+  captureTplBtn.addEventListener('click', async () => {
+    try {
+      await waitForCV();
+      if (!cv) {
+        log('OpenCV not available');
+        return;
+      }
+      
+      const vw = videoEl.videoWidth;
+      const vh = videoEl.videoHeight;
+      if (!vw || !vh) {
+        log('No video source - start monitoring first');
+        return;
+      }
+      
+      // Capture from current video frame
+      const roiPx = Number($('roiPx')?.value || 0) / 100;
+      const roiPy = Number($('roiPy')?.value || 0) / 100;
+      const roiPw = Math.max(0.01, Number($('roiPw')?.value || 20) / 100);
+      const roiPh = Math.max(0.01, Number($('roiPh')?.value || 15) / 100);
+      
+      const rx = Math.floor(vw * roiPx);
+      const ry = Math.floor(vw * roiPy);
+      const rw = Math.floor(vw * roiPw);
+      const rh = Math.floor(vh * roiPh);
+      
+      if (!validateROI(rx, ry, rw, rh)) return;
+      
+      // Draw ROI to canvas
+      canvasEl.width = rw;
+      canvasEl.height = rh;
+      ctx.drawImage(videoEl, rx, ry, rw, rh, 0, 0, rw, rh);
+      const imgData = ctx.getImageData(0, 0, rw, rh);
+      
+      // Convert to OpenCV Mat (grayscale)
+      let srcMat = cv.matFromImageData(imgData);
+      let grayMat = new cv.Mat();
+      cv.cvtColor(srcMat, grayMat, cv.COLOR_RGBA2GRAY);
+      
+      // Replace template
+      if (templateMat) templateMat.delete();
+      templateMat = grayMat;
+      tplReady = true;
+      srcMat.delete();
+      
+      setBadge($('templateStatus'), 'Captured', 'success');
+      log(`Template captured: ${rw}x${rh} px`);
+    } catch (err) {
+      log('Template capture error: ' + (err && err.message ? err.message : String(err)));
+    }
+  });
+}
+
+if (loadTplInput) {
+  loadTplInput.addEventListener('change', async (e) => {
+    try {
+      await waitForCV();
+      if (!cv) {
+        log('OpenCV not available');
+        return;
+      }
+      
+      const file = e.target.files && e.target.files[0];
+      if (!file) return;
+      
+      const img = new Image();
+      img.onload = () => {
+        try {
+          const w = img.naturalWidth;
+          const h = img.naturalHeight;
+          const tmpCanvas = document.createElement('canvas');
+          tmpCanvas.width = w;
+          tmpCanvas.height = h;
+          const tmpCtx = tmpCanvas.getContext('2d');
+          tmpCtx.drawImage(img, 0, 0);
+          const imgData = tmpCtx.getImageData(0, 0, w, h);
+          
+          // Convert to grayscale OpenCV Mat
+          let srcMat = cv.matFromImageData(imgData);
+          let grayMat = new cv.Mat();
+          cv.cvtColor(srcMat, grayMat, cv.COLOR_RGBA2GRAY);
+          
+          // Replace template
+          if (templateMat) templateMat.delete();
+          templateMat = grayMat;
+          tplReady = true;
+          srcMat.delete();
+          
+          setBadge($('templateStatus'), 'Loaded', 'success');
+          log(`Template loaded from file: ${w}x${h} px`);
+        } catch (err) {
+          log('Template load error: ' + (err && err.message ? err.message : String(err)));
+        }
+      };
+      img.onerror = () => log('Failed to load image file');
+      img.src = URL.createObjectURL(file);
+    } catch (err) {
+      log('File load error: ' + (err && err.message ? err.message : String(err)));
+    }
+  });
+}
 
 // Listen to OBS state events from main for immediate feedback
 api.onObsState((data) => {
@@ -216,7 +496,7 @@ if (window.monitor && window.monitor.onKeyEvent) {
 function doStartMonitoring() {
   if (monitoring) return;
   monitoring = true; setBadge(monStatusEl, 'Monitoring', 'success');
-  api.startMonitoring();
+  window.monitor.start();
   startScreenCapture();
   // persist monitoring state
   saveConfigPartial({ monitoring: true });
@@ -224,7 +504,7 @@ function doStartMonitoring() {
 function doStopMonitoring() {
   if (!monitoring) return;
   monitoring = false; setBadge(monStatusEl, 'Stopped', 'secondary');
-  api.stopMonitoring();
+  window.monitor.stop();
   stopScreenCapture();
   saveConfigPartial({ monitoring: false });
 }
@@ -232,27 +512,133 @@ function doStopMonitoring() {
 $('startMonitoring').addEventListener('click', doStartMonitoring);
 $('stopMonitoring').addEventListener('click', doStopMonitoring);
 
-// No native hook now; show N/A
-if (iohookStatusEl) setBadge(iohookStatusEl, 'N/A', 'secondary');
+// Check if uiohook is available and update status
+(async () => {
+  try {
+    const result = await window.monitor.hasUiohook();
+    if (iohookStatusEl) {
+      setBadge(iohookStatusEl, result.available ? 'Available' : 'Not Available', result.available ? 'success' : 'warning');
+    }
+  } catch (e) {
+    if (iohookStatusEl) setBadge(iohookStatusEl, 'Unknown', 'secondary');
+  }
+})();
+
+// Populate monitor dropdown with available screens
+async function populateMonitors() {
+  const monitorSelect = $('monitorSelect');
+  if (!monitorSelect || !window.desktop || !window.desktop.getSources) return;
+  
+  try {
+    const sources = await window.desktop.getSources({ types: ['screen'] });
+    monitorSelect.innerHTML = '<option value="">-- Select Monitor --</option>';
+    sources.forEach((source, idx) => {
+      const opt = document.createElement('option');
+      opt.value = source.id;
+      // Display: "Display Name - 3440x1440" or fallback to source.name
+      let displayText = source.displayName || source.name || `Monitor ${idx + 1}`;
+      if (source.width && source.height) {
+        displayText += ` - ${source.width}x${source.height}`;
+      }
+      opt.textContent = displayText;
+      monitorSelect.appendChild(opt);
+    });
+    
+    // Restore selected monitor if saved in config
+    if (selectedSourceId) {
+      monitorSelect.value = selectedSourceId;
+      // If the saved ID doesn't exist in the list, it will just show "-- Select Monitor --"
+      if (monitorSelect.value === selectedSourceId) {
+        log('Restored monitor selection: ' + monitorSelect.options[monitorSelect.selectedIndex].text);
+      } else {
+        log('Saved monitor not found in current display list');
+      }
+    }
+    
+    // Save selection on change
+    monitorSelect.addEventListener('change', async () => {
+      selectedSourceId = monitorSelect.value;
+      if (selectedSourceId) {
+        await saveConfigPartial({ selectedSourceId });
+        log('Monitor saved: ' + monitorSelect.options[monitorSelect.selectedIndex].text);
+      }
+    });
+  } catch (e) {
+    log('Failed to populate monitors: ' + (e && e.message ? e.message : String(e)));
+  }
+}
+
+// Listen for G key map open/close events from main
+window.monitor.onMapOpen(() => {
+  if (inDeathScene) {
+    log('Map open ignored - in Death scene (G key disabled)');
+    return;
+  }
+  log('Map opened (G key pressed) - switching to Map scene');
+  api.switchOnMapOpen();
+});
+
+window.monitor.onMapClosed(() => {
+  if (inDeathScene) {
+    log('Map close ignored - in Death scene (G key disabled)');
+    return;
+  }
+  log('Map closed (G key released) - switching to Live scene');
+  api.switchOnMapClosed();
+});
 
 // Screen capture and death detection via ROI diff
-let mediaStream = null;
-let roiTemplate = null; // ImageData for death ROI
-let thumbTimer = null; // desktopCapturer thumbnail polling
+let roiTemplate = null; // ImageData for death ROI (legacy, unused)
 let processingThumb = false;
-let mapRoi = null; let mapTemplate = null; let mapDetected = false;
 
 async function startScreenCapture() {
   setBadge(deathDetectStatusEl, roi ? 'Armed' : 'No ROI', roi ? 'warning' : 'secondary');
-  // Try standard getDisplayMedia first
+  
   let stream = null;
-  try {
-    stream = await window.navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
-  } catch (e) {
-    log('getDisplayMedia error: ' + (e && e.message ? e.message : String(e)));
+  
+  // Check if user selected a monitor from dropdown
+  const monitorSelect = $('monitorSelect');
+  if (monitorSelect && monitorSelect.value) {
+    selectedSourceId = monitorSelect.value;
   }
+  
+  // Try to use selected screen source first
+  if (selectedSourceId && window.desktop && window.desktop.getSources) {
+    try {
+      const sources = await window.desktop.getSources({ types: ['screen', 'window'] });
+      const savedScreen = sources.find(s => s.id === selectedSourceId);
+      if (savedScreen) {
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: false,
+          video: {
+            mandatory: {
+              chromeMediaSource: 'desktop',
+              chromeMediaSourceId: savedScreen.id,
+              maxWidth: 8000, maxHeight: 8000, maxFrameRate: 30
+            }
+          }
+        }).catch(e => { log('Saved source error: ' + e.message); return null; });
+        
+        if (stream) {
+          log('Using saved screen: ' + (savedScreen.name || savedScreen.id));
+        }
+      }
+    } catch (e) {
+      log('Saved source lookup error: ' + (e && e.message ? e.message : String(e)));
+    }
+  }
+  
+  // Fall back to standard getDisplayMedia
+  if (!stream) {
+    try {
+      stream = await window.navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+    } catch (e) {
+      log('getDisplayMedia error: ' + (e && e.message ? e.message : String(e)));
+    }
+  }
+  
+  // Final fallback: first available desktop source
   if (!stream && window.desktop && window.desktop.getSources) {
-    // Try legacy getUserMedia desktop source
     try {
       const sources = await window.desktop.getSources({ types: ['screen'] });
       const screen = sources && sources[0];
@@ -278,8 +664,7 @@ async function startScreenCapture() {
     mediaStream = stream;
     videoEl.srcObject = mediaStream;
     detecting = true;
-    if (thumbTimer) { clearInterval(thumbTimer); thumbTimer = null; }
-    detectTimer = setInterval(processFrame, 500);
+    detectTimer = setInterval(processFrame, DEATH_DETECT_INTERVAL_MS);
     log('Screen capture: using getDisplayMedia/userMedia stream');
     return;
   }
@@ -289,7 +674,8 @@ async function startScreenCapture() {
     setBadge(deathDetectStatusEl, 'Fallback capture', 'warning');
     detecting = true;
     log('Screen capture: using desktopCapturer thumbnail polling');
-    thumbTimer = setInterval(processThumbnail, 700);
+    detectTimer = setInterval(processFrame, DEATH_DETECT_INTERVAL_MS);
+    log('Screen capture: using getDisplayMedia/userMedia stream');
     return;
   }
 
@@ -299,7 +685,6 @@ async function startScreenCapture() {
 function stopScreenCapture() {
   detecting = false;
   if (detectTimer) clearInterval(detectTimer);
-  if (thumbTimer) clearInterval(thumbTimer);
   processingThumb = false;
   if (mediaStream) {
     mediaStream.getTracks().forEach(t => t.stop());
@@ -308,90 +693,91 @@ function stopScreenCapture() {
 }
 
 async function processFrame() {
-  if (!detecting || !roi) return;
-  const vw = videoEl.videoWidth; const vh = videoEl.videoHeight;
-  if (!vw || !vh) return;
-  canvasEl.width = Math.floor(vw / 4);
-  canvasEl.height = Math.floor(vh / 4);
-  const scaleX = canvasEl.width / vw;
-  const scaleY = canvasEl.height / vh;
-  ctx.drawImage(videoEl, 0, 0, canvasEl.width, canvasEl.height);
-
-  const rx = Math.floor(roi.x * scaleX);
-  const ry = Math.floor(roi.y * scaleY);
-  const rw = Math.max(1, Math.floor(roi.w * scaleX));
-  const rh = Math.max(1, Math.floor(roi.h * scaleY));
-
-  const img = ctx.getImageData(rx, ry, rw, rh);
-  if (!roiTemplate) {
-    // Initialize template from first frame after arming
-    roiTemplate = img;
+  if (!detecting) return;
+  if (!cvReady || !templateMat || !tplReady) {
+    setBadge(deathDetectStatusEl, 'No Template', 'warning');
     return;
   }
-
-  const diff = meanAbsDiff(img.data, roiTemplate.data);
-  // On death screen, ROI should closely match template (if template was captured on death)
-  const threshold = 10; // tuneable 0..255
-  if (diff < threshold) {
-    setBadge(deathDetectStatusEl, 'DEATH MATCH', 'danger');
-    api.notifyDeathDetected();
-  } else {
-    setBadge(deathDetectStatusEl, 'Scanning', 'secondary');
-  }
-}
-
-function meanAbsDiff(a, b) {
-  const n = Math.min(a.length, b.length);
-  let sum = 0; let count = 0;
-  for (let i = 0; i < n; i += 4) { // RGBA
-    const dr = Math.abs(a[i] - b[i]);
-    const dg = Math.abs(a[i+1] - b[i+1]);
-    const db = Math.abs(a[i+2] - b[i+2]);
-    sum += (dr + dg + db) / 3; count++;
-  }
-  return count ? (sum / count) : 255;
-}
-
-async function processThumbnail() {
-  if (!detecting || processingThumb || !window.desktop || !window.desktop.getSources) return;
-  processingThumb = true;
+  
   try {
-    const sources = await window.desktop.getSources({ types: ['screen'], thumbnailSize: { width: 1920, height: 1080 } });
-    const screen = sources && sources[0];
-    if (!screen || !screen.thumbnail) { processingThumb = false; return; }
-    const size = screen.thumbnail.getSize();
-    const bitmap = screen.thumbnail.toBitmap(); // RGBA Buffer
-    // Draw bitmap to canvas at half size to reduce work
-    const targetW = Math.max(320, Math.floor(size.width / 2));
-    const targetH = Math.max(180, Math.floor(size.height / 2));
-    canvasEl.width = targetW; canvasEl.height = targetH;
-    // Create ImageData from bitmap
-    const imageData = new ImageData(new Uint8ClampedArray(bitmap.buffer, bitmap.byteOffset, bitmap.length), size.width, size.height);
-    const tmp = document.createElement('canvas'); tmp.width = size.width; tmp.height = size.height;
-    const tctx = tmp.getContext('2d'); tctx.putImageData(imageData, 0, 0);
-    ctx.drawImage(tmp, 0, 0, targetW, targetH);
-
-    if (!roi) { processingThumb = false; return; }
-    const scaleX = targetW / size.width; const scaleY = targetH / size.height;
-    const rx = Math.max(0, Math.floor(roi.x * scaleX));
-    const ry = Math.max(0, Math.floor(roi.y * scaleY));
-    const rw = Math.max(1, Math.floor(roi.w * scaleX));
-    const rh = Math.max(1, Math.floor(roi.h * scaleY));
-    const img = ctx.getImageData(rx, ry, rw, rh);
-
-    if (!roiTemplate) { roiTemplate = img; processingThumb = false; return; }
-    const diff = meanAbsDiff(img.data, roiTemplate.data);
-    const threshold = 10;
-    if (diff < threshold) {
-      setBadge(deathDetectStatusEl, 'DEATH MATCH', 'danger');
-      api.notifyDeathDetected();
-    } else {
-      setBadge(deathDetectStatusEl, 'Scanning', 'secondary');
+    const vw = videoEl.videoWidth;
+    const vh = videoEl.videoHeight;
+    if (!vw || !vh) return;
+    
+    // Draw full frame to canvas for processing
+    canvasEl.width = vw;
+    canvasEl.height = vh;
+    ctx.drawImage(videoEl, 0, 0, vw, vh);
+    
+    // Get image data
+    const imageData = ctx.getImageData(0, 0, vw, vh);
+    
+    let src = null, srcGray = null, result = null;
+    try {
+      // Convert to OpenCV Mat
+      src = cv.matFromImageData(imageData);
+      srcGray = new cv.Mat();
+      cv.cvtColor(src, srcGray, cv.COLOR_RGBA2GRAY);
+      
+      // Check size compatibility
+      if (srcGray.cols < templateMat.cols || srcGray.rows < templateMat.rows) {
+        setBadge(deathDetectStatusEl, 'Template too large', 'warning');
+        return;
+      }
+      
+      // Perform template matching
+      result = new cv.Mat();
+      cv.matchTemplate(srcGray, templateMat, result, cv.TM_CCOEFF_NORMED);
+      
+      // Get best match score
+      const mm = cv.minMaxLoc(result);
+      const score = mm.maxVal;
+      const threshold = (Number($('thresh')?.value || DEFAULT_THRESHOLD_PERCENT)) / 100;
+      
+      // Update match score display
+      const scoreEl = $('matchScore');
+      if (scoreEl) {
+        scoreEl.textContent = `${(score*100).toFixed(1)}%`;
+        scoreEl.className = score >= threshold ? 'badge text-bg-success' : 'badge text-bg-dark';
+      }
+      
+      // Check with cooldown
+      if (score >= threshold && Date.now() > cooldownUntil) {
+        // Death detected!
+        if (!inDeathScene) {
+          setBadge(deathDetectStatusEl, 'DEATH', 'danger');
+          api.notifyDeathDetected();
+          cooldownUntil = Date.now() + DEATH_DETECT_COOLDOWN_MS;
+          inDeathScene = true; // Mark that we're in death scene
+          log(`Death detected! Match score: ${(score*100).toFixed(1)}% - G key disabled`);
+        } else {
+          // Already in death scene, just update display
+          setBadge(deathDetectStatusEl, 'In Death Scene', 'danger');
+        }
+      } else if (inDeathScene && score < threshold && Date.now() > cooldownUntil) {
+        // Death screen cleared - auto-return to Live
+        setBadge(deathDetectStatusEl, 'Returning to Live', 'success');
+        api.switchOnMapClosed(); // Use same IPC call as G key release (switches to Live)
+        inDeathScene = false;
+        log(`Death screen cleared! Match score: ${(score*100).toFixed(1)}% - Returning to Live, G key re-enabled`);
+      } else if (Date.now() > cooldownUntil && !inDeathScene) {
+        setBadge(deathDetectStatusEl, 'Scanning', 'secondary');
+      } else if (inDeathScene) {
+        // In death scene but still in cooldown
+        setBadge(deathDetectStatusEl, 'In Death Scene', 'danger');
+      } else {
+        // In cooldown
+        const remaining = Math.ceil((cooldownUntil - Date.now()) / 1000);
+        setBadge(deathDetectStatusEl, `Cooldown (${remaining}s)`, 'info');
+      }
+    } finally {
+      // Clean up OpenCV Mats
+      if (src) src.delete();
+      if (srcGray) srcGray.delete();
+      if (result) result.delete();
     }
-  } catch (e) {
-    log('thumbnail capture error: ' + (e && e.message ? e.message : String(e)));
-  } finally {
-    processingThumb = false;
+  } catch (err) {
+    log('Frame processing error: ' + (err && err.message ? err.message : String(err)));
   }
 }
 
@@ -401,14 +787,29 @@ $('selectROI').addEventListener('click', async () => {
   if (!mediaStream) await startScreenCapture();
   await new Promise(r => setTimeout(r, 300));
   const vw = videoEl.videoWidth; const vh = videoEl.videoHeight;
-  if (!vw || !vh) return;
-  canvasEl.width = vw; canvasEl.height = vh;
+  if (!vw || !vh) {
+    log('No video dimensions available');
+    return;
+  }
+  
+  // Set canvas to exact video resolution (1:1 pixel mapping)
+  canvasEl.width = vw; 
+  canvasEl.height = vh;
   ctx.drawImage(videoEl, 0, 0, vw, vh);
 
   // Simple click-drag to define ROI on the canvas
   const rect = canvasEl.getBoundingClientRect();
   let start = null; let tempRect = null;
-  function toCanvas(e) { return { x: e.clientX - rect.left, y: e.clientY - rect.top }; }
+  
+  // Convert mouse coordinates to canvas pixel coordinates
+  function toCanvas(e) { 
+    const scaleX = vw / rect.width;
+    const scaleY = vh / rect.height;
+    return { 
+      x: Math.floor((e.clientX - rect.left) * scaleX), 
+      y: Math.floor((e.clientY - rect.top) * scaleY) 
+    }; 
+  }
 
   function drawOverlay() {
     ctx.drawImage(videoEl, 0, 0, vw, vh);
@@ -419,18 +820,102 @@ $('selectROI').addEventListener('click', async () => {
   }
 
   function onDown(e) { start = toCanvas(e); tempRect = null; }
-  function onMove(e) { if (!start) return; const p = toCanvas(e); tempRect = { x: Math.min(start.x,p.x), y: Math.min(start.y,p.y), w: Math.abs(p.x-start.x), h: Math.abs(p.y-start.y) }; drawOverlay(); }
-  function onUp(e) {
+  function onMove(e) { 
+    if (!start) return; 
+    const p = toCanvas(e); 
+    tempRect = { 
+      x: Math.min(start.x, p.x), 
+      y: Math.min(start.y, p.y), 
+      w: Math.abs(p.x - start.x), 
+      h: Math.abs(p.y - start.y) 
+    }; 
+    drawOverlay(); 
+  }
+  async function onUp(e) {
     if (!start) return;
-    const p = toCanvas(e); tempRect = { x: Math.min(start.x,p.x), y: Math.min(start.y,p.y), w: Math.abs(p.x-start.x), h: Math.abs(p.y-start.y) };
+    const p = toCanvas(e); 
+    tempRect = { 
+      x: Math.min(start.x, p.x), 
+      y: Math.min(start.y, p.y), 
+      w: Math.abs(p.x - start.x), 
+      h: Math.abs(p.y - start.y) 
+    };
     canvasEl.removeEventListener('mousedown', onDown);
     canvasEl.removeEventListener('mousemove', onMove);
     canvasEl.removeEventListener('mouseup', onUp);
     ctx.drawImage(videoEl, 0, 0, vw, vh);
     roi = tempRect;
+    
+    // Update ROI status with pixel coordinates
     roiStatusEl.textContent = `x:${roi.x}, y:${roi.y}, w:${roi.w}, h:${roi.h}`;
-    roiTemplate = null; // reset to arm template on next detection loop
-    saveConfigPartial({ deathTemplate: { roi } });
+    
+    // Update ROI percent inputs
+    const roiPxInput = $('roiPx');
+    const roiPyInput = $('roiPy');
+    const roiPwInput = $('roiPw');
+    const roiPhInput = $('roiPh');
+    if (roiPxInput) roiPxInput.value = Math.round((roi.x / vw) * 100);
+    if (roiPyInput) roiPyInput.value = Math.round((roi.y / vh) * 100);
+    if (roiPwInput) roiPwInput.value = Math.round((roi.w / vw) * 100);
+    if (roiPhInput) roiPhInput.value = Math.round((roi.h / vh) * 100);
+    
+    // Capture template from ROI
+    log(`Attempting template capture - cvReady: ${cvReady}, cv: ${!!cv}`);
+    try {
+      if (!cvReady || !cv) {
+        log('OpenCV not ready! Trying to initialize...');
+        await waitForCV();
+      }
+      
+      if (cvReady && cv) {
+        log(`Extracting ${roi.w}x${roi.h} region at (${roi.x}, ${roi.y})`);
+        
+        // Extract ROI from video
+        const roiCanvas = document.createElement('canvas');
+        roiCanvas.width = roi.w;
+        roiCanvas.height = roi.h;
+        const roiCtx = roiCanvas.getContext('2d');
+        roiCtx.drawImage(videoEl, roi.x, roi.y, roi.w, roi.h, 0, 0, roi.w, roi.h);
+        const imgData = roiCtx.getImageData(0, 0, roi.w, roi.h);
+        
+        log('Converting to OpenCV grayscale Mat...');
+        // Convert to grayscale OpenCV Mat
+        let srcMat = cv.matFromImageData(imgData);
+        let grayMat = new cv.Mat();
+        cv.cvtColor(srcMat, grayMat, cv.COLOR_RGBA2GRAY);
+        
+        // Replace template
+        if (templateMat) {
+          log('Deleting old template');
+          templateMat.delete();
+        }
+        templateMat = grayMat;
+        tplReady = true;
+        srcMat.delete();
+        
+        // Save template data to config
+        const templateData = {
+          width: grayMat.cols,
+          height: grayMat.rows,
+          data: btoa(String.fromCharCode.apply(null, grayMat.data))
+        };
+        
+        setBadge($('templateStatus'), 'Captured', 'success');
+        log(`✓ Template captured successfully: ${roi.w}x${roi.h} grayscale Mat`);
+        
+        // Save both ROI and template data
+        saveConfigPartial({ deathTemplate: { roi, templateData } });
+      } else {
+        log('ERROR: OpenCV still not ready after waitForCV()');
+        setBadge($('templateStatus'), 'OpenCV Not Ready', 'danger');
+      }
+    } catch (err) {
+      log('ERROR: Template capture failed: ' + (err && err.message ? err.message : String(err)));
+      setBadge($('templateStatus'), 'Capture Failed', 'danger');
+    }
+    
+    roiTemplate = null; // reset legacy template
+    log(`ROI selected: ${roi.w}x${roi.h} at (${roi.x}, ${roi.y})`);
   }
 
   canvasEl.addEventListener('mousedown', onDown);
@@ -443,6 +928,31 @@ $('clearROI').addEventListener('click', () => {
   saveConfigPartial({ deathTemplate: null });
 });
 
+// Cleanup on window unload
+window.addEventListener('beforeunload', () => {
+  // Clean up OpenCV resources
+  if (templateMat) {
+    try {
+      templateMat.delete();
+      templateMat = null;
+    } catch (err) {
+      console.error('Error cleaning up template mat:', err);
+    }
+  }
+  
+  // Stop media streams
+  if (mediaStream) {
+    try {
+      mediaStream.getTracks().forEach(t => t.stop());
+    } catch (err) {
+      console.error('Error stopping media stream:', err);
+    }
+  }
+  
+  // Clear intervals
+  if (detectTimer) clearInterval(detectTimer);
+});
+
 // Init
 window.addEventListener('DOMContentLoaded', async () => {
   try {
@@ -453,10 +963,44 @@ window.addEventListener('DOMContentLoaded', async () => {
   setBadge(obsStatusEl, window.api ? 'Disconnected' : 'No bridge', window.api ? 'secondary' : 'danger');
   setBadge(monStatusEl, 'Idle', 'secondary');
   setBadge(deathDetectStatusEl, 'Off', 'secondary');
+  
+  // Initialize OpenCV
+  try {
+    if (!initOpenCV()) {
+      log('OpenCV not ready yet, setting up cv.onRuntimeInitialized callback...');
+      // Set up the callback for when OpenCV finishes loading
+      const Module = {
+        onRuntimeInitialized: () => {
+          log('cv.onRuntimeInitialized fired!');
+          initOpenCV();
+        }
+      };
+      
+      // If cv already exists but not ready, assign callback
+      if (window.cv) {
+        window.cv.onRuntimeInitialized = Module.onRuntimeInitialized;
+      } else {
+        // If cv doesn't exist yet, set up global Module for OpenCV to use
+        window.Module = Module;
+      }
+    }
+  } catch (e) {
+    log('OpenCV init error: ' + (e && e.message ? e.message : String(e)));
+  }
+  
+  // Populate monitor dropdown
+  try {
+    await populateMonitors();
+  } catch (e) {
+    log('Failed to populate monitors: ' + (e && e.message ? e.message : String(e)));
+  }
+  
   try {
     const p = await api.getConfigPath();
     if (p && p.ok) log('Config path: ' + p.path);
-  } catch (_) {}
+  } catch (err) {
+    log('Config path error: ' + (err && err.message ? err.message : String(err)));
+  }
   // Auto-connect and monitor based on config flags
   try {
     if (cfg && (cfg.autoConnect ?? true)) {

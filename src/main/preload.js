@@ -1,4 +1,4 @@
-const { contextBridge, ipcRenderer, desktopCapturer } = require('electron');
+const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('api', {
   // Config
@@ -20,7 +20,16 @@ contextBridge.exposeInMainWorld('api', {
   saveLog: (content) => ipcRenderer.invoke('log:save', content)
 });
 
-// Desktop capture helper (fallback when getDisplayMedia is denied)
+// Desktop capture helper (using IPC instead of direct desktopCapturer)
 contextBridge.exposeInMainWorld('desktop', {
-  getSources: (opts) => desktopCapturer.getSources(opts || { types: ['screen', 'window'] })
+  getSources: (opts) => ipcRenderer.invoke('desktop:getSources', opts || { types: ['screen', 'window'] })
+});
+
+// Optional monitoring start/stop (for key hooks in main if enabled)
+contextBridge.exposeInMainWorld('monitor', {
+  start: () => ipcRenderer.send('monitor:start'),
+  stop: () => ipcRenderer.send('monitor:stop'),
+  hasUiohook: () => ipcRenderer.invoke('monitor:hasUiohook'),
+  onMapOpen: (cb) => ipcRenderer.on('monitor:mapOpen', () => cb()),
+  onMapClosed: (cb) => ipcRenderer.on('monitor:mapClosed', () => cb())
 });

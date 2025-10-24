@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, globalShortcut, dialog, Menu } = require('electron');
+const { app, BrowserWindow, ipcMain, globalShortcut, dialog, Menu, screen, Tray, nativeImage } = require('electron');
 const path = require('path');
 const Store = require('electron-store');
 const { ObsClient } = require('./obsClient');
@@ -16,13 +16,18 @@ const store = new Store({
 });
 
 let mainWindow;
+let tray = null;
 let obs = new ObsClient();
-// No native key hook; detection handled in renderer via screen analysis
+let uiohook = null; // optional global keyboard hook
 
 async function createWindow() {
+  // Use PNG for window icon (better cross-platform, works in dev and production)
+  const iconPath = path.join(__dirname, '../../build/icon.png');
+  
   mainWindow = new BrowserWindow({
     width: 1000,
     height: 720,
+    icon: iconPath,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -34,22 +39,73 @@ async function createWindow() {
 
   await mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
 
+  mainWindow.on('close', (event) => {
+    if (!app.isQuitting) {
+      event.preventDefault();
+      mainWindow.hide();
+    }
+  });
+
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
 }
 
+function createTray() {
+  // Use PNG for tray icon (better quality and cross-platform compatibility)
+  const iconPath = path.join(__dirname, '../../build/icon.png');
+  const icon = nativeImage.createFromPath(iconPath);
+  
+  // Resize for tray (Windows expects 16x16 or 32x32)
+  const resizedIcon = icon.resize({ width: 32, height: 32 });
+  tray = new Tray(resizedIcon);
+  
+  const contextMenu = Menu.buildFromTemplate([
+    {
+      label: 'Show',
+      click: () => {
+        if (mainWindow) {
+          mainWindow.show();
+          mainWindow.focus();
+        }
+      }
+    },
+    {
+      label: 'Quit',
+      click: () => {
+        app.isQuitting = true;
+        app.quit();
+      }
+    }
+  ]);
+  
+  tray.setToolTip('Rust OBS Scene Toggle');
+  tray.setContextMenu(contextMenu);
+  
+  // Double-click tray icon to show window
+  tray.on('double-click', () => {
+    if (mainWindow) {
+      mainWindow.show();
+      mainWindow.focus();
+    }
+  });
+}
+
 app.whenReady().then(async () => {
-  // Seed OBS connection with user-provided values for debugging
+  // Try to load uiohook-napi for G key hold
   try {
-    store.set('obs', { host: '192.168.1.23', port: 4455, password: '8sJHVsttK8l4iVWL' });
-    store.set('autoConnect', true);
-    store.set('autoMonitor', true);
-  } catch (_) {}
+    const mod = require('uiohook-napi');
+    uiohook = mod && (mod.uIOhook || mod);
+  } catch (_) { uiohook = null; }
   // Remove default menu bar
   try { Menu.setApplicationMenu(null); } catch (_) {}
+  
+  createTray();
   await createWindow();
-  try { mainWindow.webContents.openDevTools({ mode: 'detach' }); } catch (_) {}
+  // Open DevTools only in development mode
+  if (process.env.NODE_ENV === 'development' || process.argv.includes('--dev')) {
+    try { mainWindow.webContents.openDevTools({ mode: 'detach' }); } catch (_) {}
+  }
   // Wire OBS events to renderer for live feedback
   try {
     obs.obs.on('ConnectionOpened', () => mainWindow && mainWindow.webContents.send('obs:state', { state: 'connected' }));
@@ -60,9 +116,12 @@ app.whenReady().then(async () => {
 });
 
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
-    app.quit();
-  }
+  // Don't quit when window is closed - keep running in tray
+  // Only quit when user explicitly selects Quit from tray menu
+});
+
+app.on('before-quit', () => {
+  app.isQuitting = true;
 });
 
 app.on('activate', async () => {
@@ -77,6 +136,45 @@ ipcMain.handle('config:set', async (_e, patch) => {
 });
 ipcMain.handle('config:path', async () => {
   try { return { path: store.path, ok: true }; } catch (e) { return { ok: false, error: String(e && e.message || e) }; }
+});
+
+// IPC: Desktop sources
+const { desktopCapturer } = require('electron');
+ipcMain.handle('desktop:getSources', async (_e, opts) => {
+  try {
+    const sources = await desktopCapturer.getSources(opts || { types: ['screen', 'window'] });
+    const displays = screen.getAllDisplays();
+    
+    // Log display info for debugging
+    console.log('Displays detected:', displays.map(d => ({
+      id: d.id,
+      label: d.label,
+      size: d.size,
+      bounds: d.bounds,
+      workArea: d.workArea
+    })));
+    
+    return sources.map((s) => {
+      // Try to match source to display
+      // Extract display ID from source id (format: "screen:0:0", "screen:1:0", etc.)
+      const match = s.id.match(/screen:(\d+):/);
+      const displayIndex = match ? parseInt(match[1]) : null;
+      const display = displayIndex !== null ? displays[displayIndex] : null;
+      
+      return {
+        id: s.id,
+        name: s.name,
+        thumbnail: s.thumbnail ? s.thumbnail.toDataURL() : null,
+        // Use bounds instead of size to get full screen including taskbar
+        width: display ? display.bounds.width : (s.thumbnail ? s.thumbnail.getSize().width : null),
+        height: display ? display.bounds.height : (s.thumbnail ? s.thumbnail.getSize().height : null),
+        displayName: display ? (display.label || `Display ${displayIndex + 1}`) : s.name
+      };
+    });
+  } catch (err) {
+    console.error('desktopCapturer error:', err);
+    return [];
+  }
 });
 
 // IPC: OBS controls
@@ -120,7 +218,32 @@ ipcMain.handle('obs:switchScene', async (_e, sceneName) => {
   return obs.switchScene(sceneName);
 });
 
-// No key monitoring in main; renderer requests scene changes via IPC
+// Key monitoring in main; renderer requests start/stop
+let monitoring = false; let mapOpen = false;
+const isG = (e) => {
+  const c = e && (e.keycode ?? e.rawcode ?? e.keyCode ?? e.keychar);
+  return c === 34 || c === 71 || c === 103 || c === 0x47;
+};
+
+// IPC: Check if uiohook is available
+ipcMain.handle('monitor:hasUiohook', async () => {
+  return { available: !!uiohook };
+});
+
+function startKeyMonitoring() {
+  if (!uiohook || monitoring) return;
+  monitoring = true;
+  const down = (e) => { if (isG(e) && !mapOpen) { mapOpen = true; mainWindow.webContents.send('monitor:mapOpen'); mainWindow.webContents.send('monitor:mapOpenSwitch'); } };
+  const up = (e) => { if (isG(e) && mapOpen) { mapOpen = false; mainWindow.webContents.send('monitor:mapClosed'); mainWindow.webContents.send('monitor:mapClosedSwitch'); } };
+  uiohook.on('keydown', down); uiohook.on('keyup', up);
+  try { uiohook.start(); } catch (_) {}
+}
+function stopKeyMonitoring() {
+  if (!uiohook) return; monitoring = false;
+  try { uiohook.removeAllListeners('keydown'); uiohook.removeAllListeners('keyup'); uiohook.stop(); } catch (_) {}
+}
+ipcMain.on('monitor:start', startKeyMonitoring);
+ipcMain.on('monitor:stop', stopKeyMonitoring);
 
 // Renderer signals that a death event has been detected
 ipcMain.on('monitor:deathDetected', async () => {

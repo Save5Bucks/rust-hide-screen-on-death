@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "description": "Electron app to switch OBS scenes for Rust (map/death).",
   "main": "src/main/main.js",
-  "author": "",
+  "author": "save5bucks",
   "license": "MIT",
   "scripts": {
     "start": "node scripts/start.js",
@@ -16,7 +16,8 @@
   },
   "dependencies": {
     "electron-store": "^8.1.0",
-    "obs-websocket-js": "^5.0.6"
+    "obs-websocket-js": "^5.0.6",
+    "uiohook-napi": "^1.5.4"
   },
   "devDependencies": {
     "electron": "^38.4.0",
@@ -26,8 +27,9 @@
   },
   "optionalDependencies": {},
   "build": {
-    "appId": "com.example.rustobs",
+    "appId": "com.save5bucks.rustobs",
     "productName": "Rust OBS Scene Toggle",
+    "copyright": "Copyright © 2025 save5bucks",
     "files": [
       "dist/**",
       "src/**",
@@ -47,13 +49,12 @@
       "icon": "build/icon.ico"
     },
     "appx": {
-      "identityName": "YourPublisher.RustOBSSceneToggle",
-      "publisherDisplayName": "Your Publisher Name",
+      "identityName": "FlinnBuilt.RustOBSSceneToggle",
+      "publisherDisplayName": "Flinn Built",
       "publisher": "CN=00000000-0000-0000-0000-000000000000",
       "backgroundColor": "#1e1e1e",
       "displayName": "Rust OBS Scene Toggle",
-      "applicationId": "RustOBSSceneToggle",
-      "capabilities": ["internetClient"]
+      "applicationId": "RustOBSSceneToggle"
     }
   }
 }

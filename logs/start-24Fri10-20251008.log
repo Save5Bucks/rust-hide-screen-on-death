@@ -1,5 +1,0 @@
-npm error code ETARGET
-npm error notarget No matching version found for electron-rebuild@^3.6.1.
-npm error notarget In most cases you or one of your dependencies are requesting
-npm error notarget a package version that doesn't exist.
-npm error A complete log of this run can be found in: C:\Users\timfl\AppData\Local\npm-cache\_logs\2025-10-24T14_08_18_450Z-debug-0.log
