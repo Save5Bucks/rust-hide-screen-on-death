@@ -55,7 +55,17 @@ This Electron app monitors your screen and communicates with OBS to automaticall
 8. Click **Start Monitoring**
 9. Minimize to system tray and start streaming safely!
 
-## 🛠️ Developer Setup
+## � Screenshots
+
+### Main Interface
+![Application UI](images/UI.png)
+*Clean, intuitive interface for OBS connection, scene selection, and monitoring controls*
+
+### Help & Documentation
+![Help Section](images/Help.png)
+*Built-in help section with detailed instructions and troubleshooting tips*
+
+## �🛠️ Developer Setup
 
 For developers who want to build from source:
 
