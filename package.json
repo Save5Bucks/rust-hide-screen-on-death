@@ -30,7 +30,6 @@
     "productName": "Rust OBS Scene Toggle",
     "copyright": "Copyright © 2025 save5bucks",
     "files": [
-      "dist/**",
       "src/**",
       "assets/**",
       "package.json"

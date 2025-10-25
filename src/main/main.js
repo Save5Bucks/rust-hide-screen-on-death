@@ -53,13 +53,11 @@ async function createWindow() {
 }
 
 function createTray() {
-  // Use PNG for tray icon (better quality and cross-platform compatibility)
-  const iconPath = path.join(__dirname, '../../build/icon.png');
-  const icon = nativeImage.createFromPath(iconPath);
+  // Use ICO for tray icon on Windows (better compatibility with system tray)
+  const iconPath = path.join(__dirname, '../../build/icon.ico');
+  tray = new Tray(iconPath);
   
-  // Resize for tray (Windows expects 16x16 or 32x32)
-  const resizedIcon = icon.resize({ width: 32, height: 32 });
-  tray = new Tray(resizedIcon);
+  tray.setToolTip('Rust OBS Scene Toggle');
   
   const contextMenu = Menu.buildFromTemplate([
     {
@@ -80,7 +78,6 @@ function createTray() {
     }
   ]);
   
-  tray.setToolTip('Rust OBS Scene Toggle');
   tray.setContextMenu(contextMenu);
   
   // Double-click tray icon to show window
