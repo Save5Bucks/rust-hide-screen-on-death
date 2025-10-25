@@ -1,7 +1,17 @@
-Rust OBS Scene Toggle Helper (Electron)
+<p align="center">
+  <img src="images/Rust_Hide_On_Death.png" alt="Rust Hide On Death" width="200"/>
+</p>
 
-[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-support-yellow?logo=buy-me-a-coffee)](https://buymeacoffee.com/save5bucks)
-[![Watch Tutorial](https://img.shields.io/badge/YouTube-Watch%20Tutorial-red?logo=youtube)](https://youtu.be/Q_JPHWbQ25c)
+<h1 align="center">Rust OBS Scene Toggle Helper</h1>
+
+<p align="center">
+  <a href="https://buymeacoffee.com/save5bucks">
+    <img src="https://img.shields.io/badge/Buy%20Me%20a%20Coffee-support-yellow?logo=buy-me-a-coffee" alt="Buy Me a Coffee"/>
+  </a>
+  <a href="https://youtu.be/Q_JPHWbQ25c">
+    <img src="https://img.shields.io/badge/YouTube-Watch%20Tutorial-red?logo=youtube" alt="Watch Tutorial"/>
+  </a>
+</p>
 
 ## 🎮 Protect Your Rust Base from Stream Snipers
 
