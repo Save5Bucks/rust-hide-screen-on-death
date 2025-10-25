@@ -23,7 +23,7 @@ let uiohook = null; // optional global keyboard hook
 
 async function createWindow() {
   // Use PNG for window icon (better cross-platform, works in dev and production)
-  const iconPath = path.join(__dirname, '../../build/icon.png');
+  const iconPath = path.join(__dirname, '../../assets/icon.png');
   
   mainWindow = new BrowserWindow({
     width: 1000,
@@ -54,7 +54,7 @@ async function createWindow() {
 
 function createTray() {
   // Use ICO for tray icon on Windows (better compatibility with system tray)
-  const iconPath = path.join(__dirname, '../../build/icon.ico');
+  const iconPath = path.join(__dirname, '../../assets/icon.ico');
   tray = new Tray(iconPath);
   
   tray.setToolTip('Rust OBS Scene Toggle');
