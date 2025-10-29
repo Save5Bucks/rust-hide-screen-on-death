@@ -217,7 +217,7 @@ ipcMain.handle('obs:switchScene', async (_e, sceneName) => {
 });
 
 // Key monitoring in main; renderer requests start/stop
-let monitoring = false; let mapOpen = false;
+let monitoring = false; let mapOpen = false; let delayInProgress = false;
 const isG = (e) => {
   const c = e && (e.keycode ?? e.rawcode ?? e.keyCode ?? e.keychar);
   return c === 34 || c === 71 || c === 103 || c === 0x47;
@@ -231,8 +231,23 @@ ipcMain.handle('monitor:hasUiohook', async () => {
 function startKeyMonitoring() {
   if (!uiohook || monitoring) return;
   monitoring = true;
-  const down = (e) => { if (isG(e) && !mapOpen) { mapOpen = true; mainWindow.webContents.send('monitor:mapOpen'); mainWindow.webContents.send('monitor:mapOpenSwitch'); } };
-  const up = (e) => { if (isG(e) && mapOpen) { mapOpen = false; mainWindow.webContents.send('monitor:mapClosed'); mainWindow.webContents.send('monitor:mapClosedSwitch'); } };
+  const down = (e) => { 
+    if (isG(e) && !mapOpen && !delayInProgress) { 
+      mapOpen = true; 
+      mainWindow.webContents.send('monitor:mapOpen'); 
+      mainWindow.webContents.send('monitor:mapOpenSwitch'); 
+    } 
+  };
+  const up = (e) => { 
+    if (isG(e) && mapOpen) {
+      mapOpen = false;
+      if (!delayInProgress) {
+        mainWindow.webContents.send('monitor:mapClosed'); 
+        mainWindow.webContents.send('monitor:mapClosedSwitch');
+      }
+      // If delay is in progress, just reset mapOpen flag but don't trigger scene switch
+    } 
+  };
   uiohook.on('keydown', down); uiohook.on('keyup', up);
   try { uiohook.start(); } catch (_) {}
 }
@@ -262,9 +277,13 @@ ipcMain.on('monitor:mapClosedSwitch', async () => {
   const cfg = store.get('scenes');
   const delay = store.get('respawnDelay') || 200;
   if (cfg && cfg.live) {
+    // Set delay flag to block G key during transition
+    delayInProgress = true;
     // Delay before returning to live to prevent coordinate leaks
     setTimeout(async () => {
       try { await obs.switchScene(cfg.live); } catch (_) {}
+      // Clear delay flag after scene switch completes
+      delayInProgress = false;
     }, delay);
   }
 });

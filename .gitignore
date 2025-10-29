@@ -34,5 +34,8 @@ config.json
 # Dev folder (private scripts, notes, etc)
 dev/
 
+# Video production files
+VIDEO_SCRIPT.md
+
 # User data (generated at runtime)
 *.electron-store

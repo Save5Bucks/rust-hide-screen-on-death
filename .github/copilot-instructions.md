@@ -1,56 +1,50 @@
 # Copilot Instructions for Rust OBS Scene Toggle Helper
 
-## Project Architecture
-- **Electron app**: Main logic in `src/main/` (entry: `main.js`). Renderer UI in `src/renderer/`.
-- **OBS Integration**: Communicates with OBS via `obs-websocket-js` (v5). Connection details and scene selection handled in UI.
-- **Death Detection**: Uses screen capture and ROI comparison to detect Rust death screen. ROI selection is user-driven via UI.
-- **Global Key Monitoring**: Optional `iohook` integration for capturing the Rust map key (G). If unavailable, only death detection is used.
+```md
+# Copilot instructions — Rust OBS Scene Toggle Helper (concise)
 
-## Key Files & Directories
-- `src/main/main.js`: Electron main process, OBS connection, IPC.
-- `src/main/obsClient.js`: OBS websocket logic, scene switching.
-- `src/main/preload.js`: IPC bridge for renderer.
-- `src/renderer/renderer.js`: UI logic, ROI selection, monitoring controls.
-- `scripts/`: Utility scripts for build/test/dev.
-- `start.bat`: Windows launch script.
+Purpose: help an AI coding agent be immediately productive in this Electron app that auto-switches OBS scenes on Rust "death" and map key events.
 
-## Developer Workflows
-- **Install dependencies**: `npm install`
-- **Start app (dev)**: `npm start` or `npm start -- --dev` (enables DevTools)
-- **Build installer**: `npm run dist`
-- **Build AppX (Windows Store)**: `npm run dist:appx`
-- **Enable iohook**: `npm i iohook` (native build tools required)
+Architecture (big picture)
+- Electron app with two processes: main (native integrations & OBS client) and renderer (UI + ROI selection). See `src/main/` and `src/renderer/`.
+- OBS integration is via obs-websocket v5; scene control happens in `src/main/obsClient.js` and is triggered through IPC from the renderer.
+- Death detection runs in the renderer using screen capture + template/ROI matching (OpenCV.js loaded from CDN). ROI selection and thresholds are user-configured in the UI.
 
-## Security & Best Practices
-- Never commit credentials - use environment variables or secure storage
-- DevTools only open when `NODE_ENV=development` or `--dev` flag is set
-- CSP policy restricts websocket connections to `ws://localhost:*` and `ws://127.0.0.1:*`
-- All OpenCV Mat objects must be deleted in finally blocks to prevent memory leaks
-- Input validation required for all user-provided values (ports, coordinates, thresholds)
+Key files to inspect or modify
+- `src/main/main.js` — app lifecycle, background tasks, and global handlers.
+- `src/main/obsClient.js` — websocket connect/reconnect, authentication, and scene switch helpers. Start here for OBS logic changes.
+- `src/main/preload.js` — secure IPC bridge (exposes limited APIs to renderer). Follow patterns here for new renderer→main APIs.
+- `src/renderer/renderer.js` & `src/renderer/index.html` — UI, ROI selection, death detection triggers and sending IPC messages.
+- `scripts/` and `start.bat` — dev helpers and Windows launch; `package.json` scripts control start/dist commands.
 
-## Conventions & Patterns
-- Scene names and OBS connection details are user-configurable via UI.
-- ROI selection for death detection is manual; code expects a stable UI region.
-- All OBS communication uses obs-websocket v5 protocol.
-- Key monitoring is only active if `iohook` is installed and loaded.
-- Electron IPC is used for main/renderer communication.
-- **Error handling**: All async operations include try-catch blocks with proper error logging.
-- **Input validation**: Port numbers, ROI coordinates, and thresholds validated before use.
-- **Memory management**: OpenCV Mats properly disposed in finally blocks; cleanup on window unload.
-- **Constants**: Magic numbers extracted (e.g., `DEATH_DETECT_INTERVAL_MS`, `DEATH_DETECT_COOLDOWN_MS`).
+How to run (developer commands)
+- Install: npm install
+- Dev run: npm start  (add `-- --dev` to enable DevTools window)
+- Build: npm run dist
+- AppX (Windows store): npm run dist:appx
+- Native optional dependency: `iohook` requires native build tools; install with `npm i iohook` and document rebuild steps in PR notes.
 
-## Integration Points
-- **OBS**: Requires obs-websocket v5 enabled (default port 4455). CSP restricts connections to localhost only.
-- **iohook**: Optional, for global key capture.
-- **OpenCV.js**: Loaded from CDN for template matching-based death detection.
+Repository conventions & patterns
+- IPC is the approved cross-process pattern. Use `preload.js` to add a safe channel; avoid exposing Node in the renderer.
+- All OBS operations should go through `obsClient.js` (single responsibility). Avoid duplicating OBS connection logic in other files.
+- OpenCV Mats are explicitly cleaned up — any image processing must free Mats in finally blocks to prevent leaks.
+- Config/state: scene names, OBS host/port, ROI coords, and thresholds are user-configurable via the renderer; prefer adding new settings to the UI rather than hardcoding.
+- Feature flags & dev tools: DevTools open only in dev mode (NODE_ENV=development or `--dev`). Preserve this check when adding debug helpers.
 
-## Example: Scene Switch Logic
-- On death detection (ROI match), switch to the configured "Death" scene via OBS websocket.
-- On map key (G) press, switch to "Map" scene if enabled.
+Integration notes & gotchas
+- OBS websocket: expect v5 protocol and localhost-only connections (CSP restricts to `ws://localhost:*`). Tests should mock websocket interactions where possible.
+- iohook: optional. If it fails (common on CI or without native toolchain), the app should still work using only death-detection. Add graceful fallbacks in feature-detection code paths.
+- OpenCV.js: loaded from CDN in renderer; offline or CI runs need stubbing/mocks for tests.
 
-## Troubleshooting
-- If `iohook` fails to load, app will notify in UI; only death detection will work.
-- For AppX packaging, update `package.json` `build.appx` fields and provide `build/icon.ico`.
+Small examples / where to look
+- To change scene-switch behavior, search `obsClient` and the IPC handler in `main.js` that listens for renderer messages.
+- To tune detection timing, search the repo for `DEATH_DETECT_INTERVAL_MS` / `DEATH_DETECT_COOLDOWN_MS` (constants are used in detection loops).
 
----
-_Review and suggest edits if any section is unclear or missing important project-specific details._
+Bots & contributor rules
+- Do not add or commit secrets (OBS auth tokens, passwords). Use environment variables and document them in README when required.
+- When adding native deps (iohook), update README and `scripts/rebuild.js` if necessary and mention Windows-specific build steps in PR body.
+
+If anything is unclear or you want this expanded into a longer developer guide (commands for signing, installer options, or AppX packing checklist), tell me which section to expand.
+
+```
+
