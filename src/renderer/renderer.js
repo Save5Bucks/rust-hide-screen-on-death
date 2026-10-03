@@ -36,7 +36,7 @@ if (!window.__rendererLoaded) { window.__rendererLoaded = true;
 const $ = (id) => document.getElementById(id);
 
 // Configuration constants
-const DEATH_DETECT_INTERVAL_MS = 400;
+const DEATH_DETECT_INTERVAL_MS = 50; // 50ms = 20 checks/sec (responsive without freezing)
 const DEATH_DETECT_COOLDOWN_MS = 2000;
 const DEFAULT_THRESHOLD_PERCENT = 85;
 const MAX_PORT_NUMBER = 65535;
@@ -90,31 +90,8 @@ const sceneMapEl = $('sceneMap');
 const sceneDeathEl = $('sceneDeath');
 const respawnDelayEl = $('respawnDelay');
 
-const videoEl = $('screenVideo');
 const canvasEl = $('preview');
 const ctx = canvasEl.getContext('2d');
-
-// Update resolution display when video metadata loads
-videoEl.addEventListener('loadedmetadata', () => {
-  const vw = videoEl.videoWidth;
-  const vh = videoEl.videoHeight;
-  if (resolutionStatusEl && vw && vh) {
-    resolutionStatusEl.textContent = `${vw}x${vh}`;
-    log(`Video resolution: ${vw}x${vh}`);
-  }
-  
-  // Update ROI percent inputs if ROI is loaded
-  if (roi && vw && vh) {
-    const roiPxInput = $('roiPx');
-    const roiPyInput = $('roiPy');
-    const roiPwInput = $('roiPw');
-    const roiPhInput = $('roiPh');
-    if (roiPxInput) roiPxInput.value = Math.round((roi.x / vw) * 100);
-    if (roiPyInput) roiPyInput.value = Math.round((roi.y / vh) * 100);
-    if (roiPwInput) roiPwInput.value = Math.round((roi.w / vw) * 100);
-    if (roiPhInput) roiPhInput.value = Math.round((roi.h / vh) * 100);
-  }
-});
 
 // OpenCV template matching state
 let templateMat = null;
@@ -122,9 +99,14 @@ let tplReady = false;
 let cooldownUntil = 0;
 let cvReady = false;
 let cv = null;
+let roiScreenWidth = 0; // Actual monitor width (e.g., 3440)
+let roiScreenHeight = 0; // Actual monitor height (e.g., 1440)
+let roiPreviewWidth = 0; // Preview width when ROI was selected (e.g., 1280)
+let roiPreviewHeight = 0; // Preview height when ROI was selected (e.g., 720)
+let templateScale = 1; // Scale factor if template was resized
 
-// Screen capture state
-let mediaStream = null;
+
+// Screen capture state (thumbnail-only mode)
 let selectedSourceId = null; // Persisted screen source
 let inDeathScene = false; // Track if we switched to death scene (prevent auto-switch back)
 
@@ -157,8 +139,16 @@ function restoreTemplate() {
       if (templateMat) templateMat.delete();
       templateMat = cv.matFromArray(height, width, cv.CV_8UC1, buffer);
       tplReady = true;
+      
+      // Restore screen and preview dimensions
+      roiScreenWidth = deathTemplate.screenWidth || 0;
+      roiScreenHeight = deathTemplate.screenHeight || 0;
+      roiPreviewWidth = deathTemplate.previewWidth || 0;
+      roiPreviewHeight = deathTemplate.previewHeight || 0;
+      
       setBadge($('templateStatus'), 'Loaded from config', 'success');
       log(`Template restored: ${width}x${height} from config`);
+      log(`Screen: ${roiScreenWidth}x${roiScreenHeight}, Preview: ${roiPreviewWidth}x${roiPreviewHeight}`);
     } catch (err) {
       log('Failed to restore template: ' + (err && err.message ? err.message : String(err)));
       setBadge($('templateStatus'), 'Restore Failed', 'warning');
@@ -333,43 +323,9 @@ respawnDelayEl.addEventListener('change', updateRespawnDelay);
 const connectBtn = $('connect');
 const refreshBtn = $('refreshScenes');
 const clearLogBtn = $('clearLog');
-const pickScreenBtn = $('pickScreen');
 connectBtn && connectBtn.addEventListener('click', () => { log((isConnected?'Disconnect':'Connect') + ' button pressed'); connectOBS(); });
 refreshBtn && refreshBtn.addEventListener('click', () => { log('Refresh scenes'); refreshScenes(); });
 clearLogBtn && clearLogBtn.addEventListener('click', () => { if (logEl) logEl.textContent = ''; });
-pickScreenBtn && pickScreenBtn.addEventListener('click', async () => {
-  try {
-    if (!window.desktop || !window.desktop.getSources) { log('desktopCapturer not available'); return; }
-    const sources = await window.desktop.getSources({ types: ['screen', 'window'], thumbnailSize: { width: 400, height: 225 } });
-    if (!sources || !sources.length) { log('No sources returned'); return; }
-    // Prefer entire screens first
-    const screen = sources.find(s => s.id && s.name && s.name.toLowerCase().includes('screen')) || sources[0];
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: false,
-      video: {
-        mandatory: {
-          chromeMediaSource: 'desktop',
-          chromeMediaSourceId: screen.id,
-          maxWidth: 8000, maxHeight: 8000, maxFrameRate: 30
-        }
-      }
-    }).catch(e => { log('getUserMedia(screen) error: ' + e.message); return null; });
-    if (stream) {
-      mediaStream = stream; videoEl.srcObject = mediaStream; detecting = true;
-      if (detectTimer) clearInterval(detectTimer);
-      detectTimer = setInterval(processFrame, DEATH_DETECT_INTERVAL_MS);
-      
-      // Save selected source
-      selectedSourceId = screen.id;
-      await saveConfigPartial({ selectedSourceId: screen.id });
-      
-      log('Using selected source: ' + (screen.name || screen.id));
-      setBadge(deathDetectStatusEl, roi ? 'Armed' : 'No ROI', roi ? 'warning' : 'secondary');
-    } else {
-      log('Could not start stream from selected source');
-    }
-  } catch (e) { log('pickScreen error: ' + (e && e.message ? e.message : String(e))); }
-});
 
 // Template capture and loading buttons
 const captureTplBtn = $('captureTemplate');
@@ -384,14 +340,16 @@ if (captureTplBtn) {
         return;
       }
       
-      const vw = videoEl.videoWidth;
-      const vh = videoEl.videoHeight;
-      if (!vw || !vh) {
-        log('No video source - start monitoring first');
+      // Use thumbnail for template capture
+      if (!thumbnailImage) {
+        log('No thumbnail available - start monitoring first');
         return;
       }
       
-      // Capture from current video frame
+      const vw = thumbnailImage.width;
+      const vh = thumbnailImage.height;
+      
+      // Capture from current thumbnail
       const roiPx = Number($('roiPx')?.value || 0) / 100;
       const roiPy = Number($('roiPy')?.value || 0) / 100;
       const roiPw = Math.max(0.01, Number($('roiPw')?.value || 20) / 100);
@@ -407,7 +365,7 @@ if (captureTplBtn) {
       // Draw ROI to canvas
       canvasEl.width = rw;
       canvasEl.height = rh;
-      ctx.drawImage(videoEl, rx, ry, rw, rh, 0, 0, rw, rh);
+      ctx.drawImage(thumbnailImage, rx, ry, rw, rh, 0, 0, rw, rh);
       const imgData = ctx.getImageData(0, 0, rw, rh);
       
       // Convert to OpenCV Mat (grayscale)
@@ -597,13 +555,12 @@ window.monitor.onMapClosed(() => {
 });
 
 // Screen capture and death detection via ROI diff
-let roiTemplate = null; // ImageData for death ROI (legacy, unused)
+// Screen capture and detection state
 let processingThumb = false;
+
 
 async function startScreenCapture() {
   setBadge(deathDetectStatusEl, roi ? 'Armed' : 'No ROI', roi ? 'warning' : 'secondary');
-  
-  let stream = null;
   
   // Check if user selected a monitor from dropdown
   const monitorSelect = $('monitorSelect');
@@ -611,115 +568,430 @@ async function startScreenCapture() {
     selectedSourceId = monitorSelect.value;
   }
   
-  // Try to use selected screen source first
-  if (selectedSourceId && window.desktop && window.desktop.getSources) {
+  // Try to use fast Python capture first
+  if (window.roiCapture && roi) {
     try {
-      const sources = await window.desktop.getSources({ types: ['screen', 'window'] });
-      const savedScreen = sources.find(s => s.id === selectedSourceId);
-      if (savedScreen) {
-        stream = await navigator.mediaDevices.getUserMedia({
-          audio: false,
-          video: {
-            mandatory: {
-              chromeMediaSource: 'desktop',
-              chromeMediaSourceId: savedScreen.id,
-              maxWidth: 8000, maxHeight: 8000, maxFrameRate: 30
-            }
-          }
-        }).catch(e => { log('Saved source error: ' + e.message); return null; });
+      log('Attempting to start Python ROI capture...');
+      const result = await window.roiCapture.start();
+      log('Python start result:', JSON.stringify(result));
+      if (result.success) {
+        usePythonCapture = true;
+        setBadge(deathDetectStatusEl, 'Monitoring (Fast)', 'success');
+        detecting = true;
+        processingThumb = true;
+        log('✓ Screen capture: using Python ROI capture (ultra-fast!)');
         
-        if (stream) {
-          log('Using saved screen: ' + (savedScreen.name || savedScreen.id));
-        }
+        fetchingThumbnail = false;
+        lastThumbnailFetch = 0;
+        
+        detectTimer = setInterval(processFrameThumbnail, DEATH_DETECT_INTERVAL_MS);
+        return;
+      } else {
+        log('Python start failed: ' + (result.error || 'Unknown error'));
       }
-    } catch (e) {
-      log('Saved source lookup error: ' + (e && e.message ? e.message : String(e)));
+    } catch (err) {
+      log('Python capture not available, using fallback: ' + err.message);
+      usePythonCapture = false;
     }
+  } else {
+    if (!window.roiCapture) log('window.roiCapture not available');
+    if (!roi) log('ROI not set');
   }
   
-  // Fall back to standard getDisplayMedia
-  if (!stream) {
-    try {
-      stream = await window.navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
-    } catch (e) {
-      log('getDisplayMedia error: ' + (e && e.message ? e.message : String(e)));
-    }
-  }
-  
-  // Final fallback: first available desktop source
-  if (!stream && window.desktop && window.desktop.getSources) {
-    try {
-      const sources = await window.desktop.getSources({ types: ['screen'] });
-      const screen = sources && sources[0];
-      if (screen) {
-        try {
-          stream = await navigator.mediaDevices.getUserMedia({
-            audio: false,
-            video: {
-              mandatory: {
-                chromeMediaSource: 'desktop',
-                chromeMediaSourceId: screen.id,
-                maxWidth: 8000, maxHeight: 8000, maxFrameRate: 30
-              }
-            }
-          });
-        } catch (e2) {
-          log('desktop getUserMedia fallback error: ' + (e2 && e2.message ? e2.message : String(e2)));
-        }
-      }
-    } catch (e) { log('desktopCapturer error: ' + (e && e.message ? e.message : String(e))); }
-  }
-  if (stream) {
-    mediaStream = stream;
-    videoEl.srcObject = mediaStream;
-    detecting = true;
-    detectTimer = setInterval(processFrame, DEATH_DETECT_INTERVAL_MS);
-    log('Screen capture: using getDisplayMedia/userMedia stream');
-    return;
-  }
-
-  // Final fallback: Poll desktopCapturer thumbnails (no permissions prompt)
+  // Fallback to Electron desktopCapturer (slower but works)
   if (window.desktop && window.desktop.getSources) {
-    setBadge(deathDetectStatusEl, 'Fallback capture', 'warning');
+    usePythonCapture = false;
+    setBadge(deathDetectStatusEl, 'Monitoring', 'success');
     detecting = true;
-    log('Screen capture: using desktopCapturer thumbnail polling');
-    detectTimer = setInterval(processFrame, DEATH_DETECT_INTERVAL_MS);
-    log('Screen capture: using getDisplayMedia/userMedia stream');
+    processingThumb = true;
+    log('Screen capture: using desktopCapturer thumbnail polling (fallback)');
+    
+    // Reset fetch state
+    fetchingThumbnail = false;
+    lastThumbnailFetch = 0;
+    
+    // DO NOT call fetchAndDisplayThumbnail here - it resizes the preview!
+    // The preview should stay at full screen resolution
+    // Detection will fetch thumbnails in the background
+    
+    detectTimer = setInterval(processFrameThumbnail, DEATH_DETECT_INTERVAL_MS);
     return;
   }
 
-  setBadge(deathDetectStatusEl, 'Permission denied', 'danger');
+  setBadge(deathDetectStatusEl, 'No capture available', 'danger');
+  log('Error: desktopCapturer not available');
 }
 
 function stopScreenCapture() {
   detecting = false;
   if (detectTimer) clearInterval(detectTimer);
   processingThumb = false;
-  if (mediaStream) {
-    mediaStream.getTracks().forEach(t => t.stop());
+  fetchingThumbnail = false; // Reset fetch flag
+  
+  // Stop Python capture if it was being used
+  if (usePythonCapture && window.roiCapture) {
+    window.roiCapture.stop().catch(err => {
+      log('Error stopping Python capture: ' + err.message);
+    });
   }
+  
   setBadge(deathDetectStatusEl, 'Off', 'secondary');
 }
 
-async function processFrame() {
-  if (!detecting) return;
+// Helper to fetch and display a thumbnail (for preview/ROI selection)
+async function fetchAndDisplayThumbnail() {
+  if (!window.desktop || !window.desktop.getSources) return;
+  
+  // Request SCALED thumbnail for preview (not full resolution)
+  // This keeps the preview canvas small and manageable
+  const thumbnailSize = { width: 1280, height: 720 }; // Scaled preview size
+  
+  const sources = await window.desktop.getSources({ 
+    types: ['screen'], 
+    thumbnailSize: thumbnailSize
+  });
+  
+  if (!sources || !sources.length) {
+    log('No screen sources available');
+    return null;
+  }
+  
+  // Use saved source or first screen
+  let screen = sources[0];
+  if (selectedSourceId) {
+    screen = sources.find(s => s.id === selectedSourceId) || sources[0];
+  }
+  
+  if (!screen) {
+    log('No screen source found');
+    return null;
+  }
+  
+  if (!screen.thumbnail) {
+    log('Screen source has no thumbnail');
+    return null;
+  }
+  
+  // Return the source object so caller can access width/height
+  return screen;
+}
+
+// Helper to display a screen source on the canvas
+async function displayScreenSource(screen) {
+  if (!screen || !screen.thumbnail) return;
+  
+  // Thumbnail should already be a data URL string from main process
+  const dataUrl = screen.thumbnail;
+  
+  if (!thumbnailImage) {
+    thumbnailImage = new Image();
+  }
+  
+  // Wait for image to load
+  await new Promise((resolve, reject) => {
+    thumbnailImage.onload = resolve;
+    thumbnailImage.onerror = (err) => {
+      log('Thumbnail image load error: ' + err);
+      reject(err);
+    };
+    thumbnailImage.src = dataUrl;
+  });
+  
+  // Display on canvas for preview
+  const imgW = thumbnailImage.width;
+  const imgH = thumbnailImage.height;
+  
+  if (imgW && imgH) {
+    canvasEl.width = imgW;
+    canvasEl.height = imgH;
+    ctx.drawImage(thumbnailImage, 0, 0, imgW, imgH);
+    
+    if (roi && roi.w && roi.h) {
+      // Draw ROI overlay box if ROI is set
+      ctx.strokeStyle = '#00ff88';
+      ctx.lineWidth = 4;
+      ctx.strokeRect(roi.x, roi.y, roi.w, roi.h);
+      
+      // Draw label
+      ctx.fillStyle = '#00ff88';
+      ctx.font = 'bold 20px monospace';
+      const label = `ROI: ${roi.w}×${roi.h}`;
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+      ctx.fillRect(roi.x, roi.y - 30, 200, 25);
+      ctx.fillStyle = '#00ff88';
+      ctx.fillText(label, roi.x + 5, roi.y - 10);
+      
+      log(`Preview updated: ${imgW}x${imgH} with ROI overlay at (${roi.x}, ${roi.y})`);
+    } else {
+      log(`Preview updated: ${imgW}x${imgH} full screen`);
+    }
+  }
+}
+
+// Python-based ROI capture (fast!)
+let thumbnailImage = null; // Preview image for UI
+let pythonROIImage = null; // Separate image for Python ROI captures (small, resized)
+let lastThumbnailFetch = 0;
+const THUMBNAIL_FETCH_INTERVAL = 50; // 50ms = 20fps with fast Python capture
+let fetchingThumbnail = false; // Prevent concurrent fetches
+let roiCanvas = null; // Reusable canvas for ROI extraction
+let roiCtx = null;
+let usePythonCapture = false; // Will be true if Python is available
+
+// Fast ROI capture using Python (5-15ms response time!)
+async function fetchROIFast() {
+  if (fetchingThumbnail || !detecting || !processingThumb) return;
+  if (!roi || !roi.w || !roi.h) return; // Need ROI coordinates
+  
+  const now = Date.now();
+  if (now - lastThumbnailFetch < THUMBNAIL_FETCH_INTERVAL) return;
+  
+  fetchingThumbnail = true;
+  const fetchStart = Date.now();
+  
+  try {
+    // Validate we have preview dimensions
+    if (!roiPreviewWidth || !roiPreviewHeight || !roiScreenWidth || !roiScreenHeight) {
+      log(`ERROR: Missing dimensions! Preview: ${roiPreviewWidth}x${roiPreviewHeight}, Screen: ${roiScreenWidth}x${roiScreenHeight}`);
+      log('Please re-select ROI to capture screen dimensions');
+      usePythonCapture = false; // Fall back to Electron
+      fetchingThumbnail = false;
+      return;
+    }
+    
+    // Scale ROI coordinates from preview resolution to native screen resolution
+    // Use the stored preview size from when ROI was selected
+    const scaleX = roiScreenWidth / roiPreviewWidth;  // e.g., 3440/1280 = 2.6875
+    const scaleY = roiScreenHeight / roiPreviewHeight; // e.g., 1440/720 = 2.0
+    
+    const nativeROI = {
+      x: Math.floor(roi.x * scaleX),
+      y: Math.floor(roi.y * scaleY),
+      w: Math.floor(roi.w * scaleX),
+      h: Math.floor(roi.h * scaleY)
+    };
+    
+    log(`Capturing: preview ROI ${roi.w}x${roi.h} → native ${nativeROI.w}x${nativeROI.h} at (${nativeROI.x},${nativeROI.y}), resize to ${roi.w}x${roi.h}`);
+    
+    // Validate coordinates are within screen bounds
+    if (nativeROI.x < 0 || nativeROI.y < 0 || 
+        nativeROI.x + nativeROI.w > roiScreenWidth || 
+        nativeROI.y + nativeROI.h > roiScreenHeight) {
+      log(`ERROR: ROI out of bounds! Native: ${nativeROI.x},${nativeROI.y} ${nativeROI.w}x${nativeROI.h}, Screen: ${roiScreenWidth}x${roiScreenHeight}`);
+      fetchingThumbnail = false;
+      return;
+    }
+    
+    // IMPORTANT: Capture at template size, not preview ROI size!
+    // The template might have been auto-scaled, so we need to match its exact dimensions
+    const targetWidth = templateMat ? templateMat.cols : roi.w;
+    const targetHeight = templateMat ? templateMat.rows : roi.h;
+    
+    const result = await window.roiCapture.captureRegion({
+      monitor: 1,
+      x: nativeROI.x,
+      y: nativeROI.y,
+      width: nativeROI.w,
+      height: nativeROI.h,
+      // Request resize to template size (ensures exact match for detection)
+      resizeWidth: targetWidth,
+      resizeHeight: targetHeight
+    });
+    
+    const captureTime = Date.now() - fetchStart;
+    if (captureTime > 50) {
+      log(`Python capture: ${captureTime}ms (slower than expected)`);
+    } else {
+      log(`✓ Python capture: ${captureTime}ms, returned ${result.width}x${result.height}`);
+    }
+    
+    if (!result || !result.success) {
+      log('Python capture failed: ' + (result ? result.error : 'No result') + ' - retrying next frame');
+      // Don't permanently disable, just skip this frame
+      return;
+    }
+    
+    // Create image from base64 data - use separate image for Python ROI
+    if (!pythonROIImage) {
+      pythonROIImage = new Image();
+    }
+    
+    // Wait for image to load before continuing
+    await new Promise((resolve, reject) => {
+      pythonROIImage.onload = () => {
+        lastThumbnailFetch = Date.now();
+        resolve();
+      };
+      pythonROIImage.onerror = (err) => {
+        log('Python ROI image load error: ' + err);
+        reject(err);
+      };
+      pythonROIImage.src = 'data:image/png;base64,' + result.data;
+    });
+    
+  } catch (err) {
+    log('Python ROI capture error: ' + (err?.message || String(err)));
+    // Fall back to slow method
+    usePythonCapture = false;
+  } finally {
+    fetchingThumbnail = false;
+  }
+}
+
+// Fallback: Separate async function to fetch thumbnails in background (slow Electron method)
+async function fetchThumbnailBackground() {
+  if (fetchingThumbnail || !detecting || !processingThumb) return;
+  
+  const now = Date.now();
+  if (now - lastThumbnailFetch < THUMBNAIL_FETCH_INTERVAL) return;
+  
+  fetchingThumbnail = true;
+  const fetchStart = Date.now();
+  try {
+    if (!window.desktop || !window.desktop.getSources) return;
+    
+    // Minimal thumbnail - just enough to detect ROI (typically 100-200px region)
+    const sources = await window.desktop.getSources({ 
+      types: ['screen'], 
+      thumbnailSize: { width: 320, height: 180 } // Smallest viable size for fast capture
+    });
+    
+    const captureTime = Date.now() - fetchStart;
+    if (captureTime > 80) {
+      log(`WARNING: Slow capture detected - ${captureTime}ms`);
+    }
+    
+    if (!sources || !sources.length) return;
+    
+    let screen = sources[0];
+    if (selectedSourceId) {
+      screen = sources.find(s => s.id === selectedSourceId) || sources[0];
+    }
+    
+    if (!screen || !screen.thumbnail) return;
+    
+    const dataUrl = screen.thumbnail;
+    if (!thumbnailImage) {
+      thumbnailImage = new Image();
+    }
+    
+    // Non-blocking image load with preview update
+    thumbnailImage.onload = () => {
+      lastThumbnailFetch = Date.now();
+      
+      // DO NOT update preview during monitoring - keep it at full screen
+      // thumbnailImage is used for detection only, not for live display
+    };
+    thumbnailImage.src = dataUrl;
+    
+  } catch (err) {
+    log('Thumbnail fetch error: ' + (err?.message || String(err)));
+  } finally {
+    fetchingThumbnail = false;
+  }
+}
+
+async function processFrameThumbnail() {
+  if (!detecting || !processingThumb) return;
   if (!cvReady || !templateMat || !tplReady) {
     setBadge(deathDetectStatusEl, 'No Template', 'warning');
     return;
   }
   
+  // Use fast Python capture if available, otherwise fall back to Electron
+  if (usePythonCapture) {
+    try {
+      await fetchROIFast(); // Wait for image to load completely
+    } catch (err) {
+      // If Python fails, log error but DON'T permanently disable
+      log('Python capture error: ' + (err && err.message ? err.message : String(err)));
+      // Don't set usePythonCapture = false here, let it retry
+    }
+  } else {
+    // Fallback: Trigger background thumbnail fetch (non-blocking)
+    fetchThumbnailBackground().catch(err => {
+      // Silently ignore fetch errors, we'll use cached thumbnail
+    });
+  }
+  
   try {
-    const vw = videoEl.videoWidth;
-    const vh = videoEl.videoHeight;
-    if (!vw || !vh) return;
     
-    // Draw full frame to canvas for processing
-    canvasEl.width = vw;
-    canvasEl.height = vh;
-    ctx.drawImage(videoEl, 0, 0, vw, vh);
+    // Select the correct image source based on capture method
+    const sourceImage = usePythonCapture ? pythonROIImage : thumbnailImage;
     
-    // Get image data
-    const imageData = ctx.getImageData(0, 0, vw, vh);
+    // Debug: Log every 20th iteration to verify detection is running
+    if (Math.random() < 0.05) { // 5% of the time
+      log(`Detection tick: sourceImage=${sourceImage ? sourceImage.width + 'x' + sourceImage.height : 'null'}, pythonROIImage=${pythonROIImage ? pythonROIImage.width + 'x' + pythonROIImage.height : 'null'}, usePython=${usePythonCapture}`);
+    }
+    
+    // Process the cached image (every 50ms)
+    if (!sourceImage || !sourceImage.width || !sourceImage.height) {
+      return; // No image yet
+    }
+    if (!roi || !roi.w || !roi.h) {
+      setBadge(deathDetectStatusEl, 'No ROI Set', 'warning');
+      return; // Need ROI to know what region to process
+    }
+    
+    const imgW = sourceImage.width;
+    const imgH = sourceImage.height;
+    
+    let roiX, roiY, roiW, roiH;
+    
+    if (usePythonCapture) {
+      // Python captured and resized to preview ROI size - use directly!
+      roiX = 0;
+      roiY = 0;
+      roiW = imgW;
+      roiH = imgH;
+    } else {
+      // Electron method: Scale ROI coordinates from original screen size to thumbnail size
+      const scaleX = roiScreenWidth > 0 ? imgW / roiScreenWidth : 1;
+      const scaleY = roiScreenHeight > 0 ? imgH / roiScreenHeight : 1;
+      
+      roiX = Math.floor(roi.x * scaleX);
+      roiY = Math.floor(roi.y * scaleY);
+      roiW = Math.floor(roi.w * scaleX);
+      roiH = Math.floor(roi.h * scaleY);
+    }
+    
+    // Debug log on first run
+    if (!roiCanvas) {
+      if (usePythonCapture) {
+        log(`Detection setup: Python ROI capture, returned image=${imgW}x${imgH}, template=${templateMat.cols}x${templateMat.rows}`);
+        log(`ROI extraction: x=${roiX}, y=${roiY}, w=${roiW}, h=${roiH}`);
+        log(`pythonROIImage size: ${pythonROIImage ? pythonROIImage.width + 'x' + pythonROIImage.height : 'null'}`);
+      } else {
+        const scaleX = roiScreenWidth > 0 ? imgW / roiScreenWidth : 1;
+        const scaleY = roiScreenHeight > 0 ? imgH / roiScreenHeight : 1;
+        log(`Detection setup: thumbnail=${imgW}x${imgH}, screen=${roiScreenWidth}x${roiScreenHeight}, scale=${scaleX.toFixed(2)}x${scaleY.toFixed(2)}`);
+        log(`ROI region: x=${roiX}, y=${roiY}, w=${roiW}, h=${roiH}`);
+      }
+    }
+    
+    // Reuse canvas for ROI extraction (create only once!)
+    if (!roiCanvas) {
+      roiCanvas = document.createElement('canvas');
+      roiCtx = roiCanvas.getContext('2d', { willReadFrequently: true });
+    }
+    
+    // Resize canvas only if dimensions changed
+    if (roiCanvas.width !== roiW || roiCanvas.height !== roiH) {
+      roiCanvas.width = roiW;
+      roiCanvas.height = roiH;
+    }
+    
+    // Draw the ROI portion
+    if (usePythonCapture) {
+      // Python already captured and resized to exact template size - use as-is, no transformation
+      roiCtx.drawImage(sourceImage, 0, 0);
+    } else {
+      // Electron: Extract ROI region from thumbnail
+      roiCtx.drawImage(sourceImage, roiX, roiY, roiW, roiH, 0, 0, roiW, roiH);
+    }
+    
+    // Get image data from the small ROI region only
+    const imageData = roiCtx.getImageData(0, 0, roiW, roiH);
     
     let src = null, srcGray = null, result = null;
     try {
@@ -728,20 +1000,40 @@ async function processFrame() {
       srcGray = new cv.Mat();
       cv.cvtColor(src, srcGray, cv.COLOR_RGBA2GRAY);
       
+      // If template was scaled down, scale the search image to match
+      let searchMat = srcGray;
+      if (templateScale < 1) {
+        const scaledWidth = Math.floor(srcGray.cols * templateScale);
+        const scaledHeight = Math.floor(srcGray.rows * templateScale);
+        searchMat = new cv.Mat();
+        cv.resize(srcGray, searchMat, new cv.Size(scaledWidth, scaledHeight), 0, 0, cv.INTER_AREA);
+      }
+      
       // Check size compatibility
-      if (srcGray.cols < templateMat.cols || srcGray.rows < templateMat.rows) {
+      if (searchMat.cols < templateMat.cols || searchMat.rows < templateMat.rows) {
         setBadge(deathDetectStatusEl, 'Template too large', 'warning');
+        if (searchMat !== srcGray) searchMat.delete();
         return;
       }
       
       // Perform template matching
       result = new cv.Mat();
-      cv.matchTemplate(srcGray, templateMat, result, cv.TM_CCOEFF_NORMED);
+      cv.matchTemplate(searchMat, templateMat, result, cv.TM_CCOEFF_NORMED);
+      
+      // Clean up scaled search mat if it was created
+      if (searchMat !== srcGray) {
+        searchMat.delete();
+      }
       
       // Get best match score
       const mm = cv.minMaxLoc(result);
       const score = mm.maxVal;
       const threshold = (Number($('thresh')?.value || DEFAULT_THRESHOLD_PERCENT)) / 100;
+      
+      // Debug: Log matching results occasionally
+      if (Math.random() < 0.1) { // 10% of the time
+        log(`Match: score=${(score*100).toFixed(1)}%, threshold=${(threshold*100).toFixed(1)}%, template=${templateMat.cols}x${templateMat.rows}, search=${searchMat.cols}x${searchMat.rows}`);
+      }
       
       // Update match score display
       const scoreEl = $('matchScore');
@@ -750,32 +1042,30 @@ async function processFrame() {
         scoreEl.className = score >= threshold ? 'badge text-bg-success' : 'badge text-bg-dark';
       }
       
-      // Check with cooldown
-      if (score >= threshold && Date.now() > cooldownUntil) {
-        // Death detected!
+      // Death detection logic with cooldown override
+      // DEATH DETECTION: Always triggers immediately (overrides cooldown)
+      if (score >= threshold) {
         if (!inDeathScene) {
           setBadge(deathDetectStatusEl, 'DEATH', 'danger');
           api.notifyDeathDetected();
           cooldownUntil = Date.now() + DEATH_DETECT_COOLDOWN_MS;
-          inDeathScene = true; // Mark that we're in death scene
+          inDeathScene = true;
           log(`Death detected! Match score: ${(score*100).toFixed(1)}% - G key disabled`);
         } else {
-          // Already in death scene, just update display
           setBadge(deathDetectStatusEl, 'In Death Scene', 'danger');
         }
-      } else if (inDeathScene && score < threshold && Date.now() > cooldownUntil) {
-        // Death screen cleared - auto-return to Live
+      } 
+      // RETURN TO LIVE: Respects cooldown (delayed return is OK)
+      else if (inDeathScene && score < threshold && Date.now() > cooldownUntil) {
         setBadge(deathDetectStatusEl, 'Returning to Live', 'success');
-        api.switchOnMapClosed(); // Use same IPC call as G key release (switches to Live)
+        api.switchOnMapClosed();
         inDeathScene = false;
         log(`Death screen cleared! Match score: ${(score*100).toFixed(1)}% - Returning to Live, G key re-enabled`);
       } else if (Date.now() > cooldownUntil && !inDeathScene) {
         setBadge(deathDetectStatusEl, 'Scanning', 'secondary');
       } else if (inDeathScene) {
-        // In death scene but still in cooldown
         setBadge(deathDetectStatusEl, 'In Death Scene', 'danger');
       } else {
-        // In cooldown
         const remaining = Math.ceil((cooldownUntil - Date.now()) / 1000);
         setBadge(deathDetectStatusEl, `Cooldown (${remaining}s)`, 'info');
       }
@@ -786,76 +1076,137 @@ async function processFrame() {
       if (result) result.delete();
     }
   } catch (err) {
-    log('Frame processing error: ' + (err && err.message ? err.message : String(err)));
+    log('Thumbnail processing error: ' + (err && err.message ? err.message : String(err)));
   }
 }
 
-// ROI selection
+// ROI selection - Draw directly on preview canvas
 $('selectROI').addEventListener('click', async () => {
-  // Ensure capture started to get a frame
-  if (!mediaStream) await startScreenCapture();
-  await new Promise(r => setTimeout(r, 300));
-  const vw = videoEl.videoWidth; const vh = videoEl.videoHeight;
-  if (!vw || !vh) {
-    log('No video dimensions available');
+  log('Starting ROI selection on preview canvas...');
+  
+  // Fetch screen source to get actual dimensions
+  const screen = await fetchAndDisplayThumbnail();
+  
+  if (!screen) {
+    log('ERROR: Could not get screen source');
     return;
   }
   
-  // Set canvas to exact video resolution (1:1 pixel mapping)
-  canvasEl.width = vw; 
-  canvasEl.height = vh;
-  ctx.drawImage(videoEl, 0, 0, vw, vh);
-
-  // Simple click-drag to define ROI on the canvas
-  const rect = canvasEl.getBoundingClientRect();
-  let start = null; let tempRect = null;
+  // Display the thumbnail
+  await displayScreenSource(screen);
+  await new Promise(r => setTimeout(r, 500)); // Wait for image to load
+  
+  if (!thumbnailImage || !thumbnailImage.width) {
+    log('ERROR: Could not load preview for ROI selection');
+    return;
+  }
+  
+  log(`Preview ready: ${thumbnailImage.width}x${thumbnailImage.height}, starting selection...`);
+  
+  // Get ACTUAL screen dimensions from the source object (includes display bounds)
+  // This is critical for scaling ROI coordinates correctly during monitoring
+  const screenWidth = screen.width || window.screen.width;
+  const screenHeight = screen.height || window.screen.height;
+  
+  roiScreenWidth = screenWidth;   // Store ACTUAL monitor resolution (e.g., 3440x1440)
+  roiScreenHeight = screenHeight;
+  roiPreviewWidth = thumbnailImage.width;  // Store preview size (e.g., 1280x720)
+  roiPreviewHeight = thumbnailImage.height;
+  
+  log(`Actual screen: ${screenWidth}x${screenHeight}, preview: ${thumbnailImage.width}x${thumbnailImage.height}`);
+  
+  // Ensure canvas matches image size (but only resize if needed)
+  if (canvasEl.width !== thumbnailImage.width || canvasEl.height !== thumbnailImage.height) {
+    log(`Resizing canvas from ${canvasEl.width}x${canvasEl.height} to ${thumbnailImage.width}x${thumbnailImage.height}`);
+    canvasEl.width = thumbnailImage.width;
+    canvasEl.height = thumbnailImage.height;
+    ctx.drawImage(thumbnailImage, 0, 0);
+  } else {
+    log('Canvas already correct size, using existing preview');
+  }
+  
+  // Selection state
+  let startX = 0, startY = 0, isDrawing = false;
+  let currentRect = null;
   
   // Convert mouse coordinates to canvas pixel coordinates
-  function toCanvas(e) { 
-    const scaleX = vw / rect.width;
-    const scaleY = vh / rect.height;
-    return { 
-      x: Math.floor((e.clientX - rect.left) * scaleX), 
-      y: Math.floor((e.clientY - rect.top) * scaleY) 
-    }; 
+  function getCanvasCoords(e) {
+    const rect = canvasEl.getBoundingClientRect();
+    const scaleX = canvasEl.width / rect.width;
+    const scaleY = canvasEl.height / rect.height;
+    return {
+      x: Math.floor((e.clientX - rect.left) * scaleX),
+      y: Math.floor((e.clientY - rect.top) * scaleY)
+    };
   }
-
-  function drawOverlay() {
-    ctx.drawImage(videoEl, 0, 0, vw, vh);
-    if (tempRect) {
-      ctx.strokeStyle = '#00ff88'; ctx.lineWidth = 3;
-      ctx.strokeRect(tempRect.x, tempRect.y, tempRect.w, tempRect.h);
+  
+  function redraw() {
+    ctx.drawImage(thumbnailImage, 0, 0);
+    if (currentRect) {
+      // Draw selection rectangle
+      ctx.strokeStyle = '#00ff88';
+      ctx.lineWidth = 4;
+      ctx.strokeRect(currentRect.x, currentRect.y, currentRect.w, currentRect.h);
+      
+      // Draw semi-transparent fill
+      ctx.fillStyle = 'rgba(0, 255, 136, 0.15)';
+      ctx.fillRect(currentRect.x, currentRect.y, currentRect.w, currentRect.h);
+      
+      // Draw dimensions label
+      ctx.fillStyle = '#00ff88';
+      ctx.font = 'bold 20px monospace';
+      const label = `${currentRect.w}×${currentRect.h} @ (${currentRect.x}, ${currentRect.y})`;
+      const labelY = currentRect.y > 30 ? currentRect.y - 10 : currentRect.y + currentRect.h + 25;
+      
+      // Draw label background
+      const metrics = ctx.measureText(label);
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+      ctx.fillRect(currentRect.x - 5, labelY - 20, metrics.width + 10, 25);
+      
+      // Draw label text
+      ctx.fillStyle = '#00ff88';
+      ctx.fillText(label, currentRect.x, labelY);
     }
   }
-
-  function onDown(e) { start = toCanvas(e); tempRect = null; }
-  function onMove(e) { 
-    if (!start) return; 
-    const p = toCanvas(e); 
-    tempRect = { 
-      x: Math.min(start.x, p.x), 
-      y: Math.min(start.y, p.y), 
-      w: Math.abs(p.x - start.x), 
-      h: Math.abs(p.y - start.y) 
-    }; 
-    drawOverlay(); 
+  
+  function onMouseDown(e) {
+    const coords = getCanvasCoords(e);
+    startX = coords.x;
+    startY = coords.y;
+    isDrawing = true;
+    currentRect = null;
+    canvasEl.style.cursor = 'crosshair';
   }
-  async function onUp(e) {
-    if (!start) return;
-    const p = toCanvas(e); 
-    tempRect = { 
-      x: Math.min(start.x, p.x), 
-      y: Math.min(start.y, p.y), 
-      w: Math.abs(p.x - start.x), 
-      h: Math.abs(p.y - start.y) 
+  
+  function onMouseMove(e) {
+    if (!isDrawing) return;
+    const coords = getCanvasCoords(e);
+    currentRect = {
+      x: Math.min(startX, coords.x),
+      y: Math.min(startY, coords.y),
+      w: Math.abs(coords.x - startX),
+      h: Math.abs(coords.y - startY)
     };
-    canvasEl.removeEventListener('mousedown', onDown);
-    canvasEl.removeEventListener('mousemove', onMove);
-    canvasEl.removeEventListener('mouseup', onUp);
-    ctx.drawImage(videoEl, 0, 0, vw, vh);
-    roi = tempRect;
+    redraw();
+  }
+  
+  async function onMouseUp(e) {
+    if (!isDrawing) return;
+    isDrawing = false;
+    canvasEl.style.cursor = 'default';
     
-    // Update ROI status with pixel coordinates
+    if (!currentRect || currentRect.w < 10 || currentRect.h < 10) {
+      log('ROI too small (minimum 10x10), selection cancelled');
+      ctx.drawImage(thumbnailImage, 0, 0);
+      cleanup();
+      return;
+    }
+    
+    // Save ROI
+    roi = currentRect;
+    log(`✓ ROI selected: ${roi.w}x${roi.h} at (${roi.x}, ${roi.y})`);
+    
+    // Update UI
     roiStatusEl.textContent = `x:${roi.x}, y:${roi.y}, w:${roi.w}, h:${roi.h}`;
     
     // Update ROI percent inputs
@@ -863,13 +1214,12 @@ $('selectROI').addEventListener('click', async () => {
     const roiPyInput = $('roiPy');
     const roiPwInput = $('roiPw');
     const roiPhInput = $('roiPh');
-    if (roiPxInput) roiPxInput.value = Math.round((roi.x / vw) * 100);
-    if (roiPyInput) roiPyInput.value = Math.round((roi.y / vh) * 100);
-    if (roiPwInput) roiPwInput.value = Math.round((roi.w / vw) * 100);
-    if (roiPhInput) roiPhInput.value = Math.round((roi.h / vh) * 100);
+    if (roiPxInput) roiPxInput.value = Math.round((roi.x / roiScreenWidth) * 100);
+    if (roiPyInput) roiPyInput.value = Math.round((roi.y / roiScreenHeight) * 100);
+    if (roiPwInput) roiPwInput.value = Math.round((roi.w / roiScreenWidth) * 100);
+    if (roiPhInput) roiPhInput.value = Math.round((roi.h / roiScreenHeight) * 100);
     
     // Capture template from ROI
-    log(`Attempting template capture - cvReady: ${cvReady}, cv: ${!!cv}`);
     try {
       if (!cvReady || !cv) {
         log('OpenCV not ready! Trying to initialize...');
@@ -877,45 +1227,150 @@ $('selectROI').addEventListener('click', async () => {
       }
       
       if (cvReady && cv) {
-        log(`Extracting ${roi.w}x${roi.h} region at (${roi.x}, ${roi.y})`);
+        log(`Extracting template from ${roi.w}x${roi.h} region...`);
         
-        // Extract ROI from video
-        const roiCanvas = document.createElement('canvas');
-        roiCanvas.width = roi.w;
-        roiCanvas.height = roi.h;
-        const roiCtx = roiCanvas.getContext('2d');
-        roiCtx.drawImage(videoEl, roi.x, roi.y, roi.w, roi.h, 0, 0, roi.w, roi.h);
-        const imgData = roiCtx.getImageData(0, 0, roi.w, roi.h);
+        let imgData;
         
-        log('Converting to OpenCV grayscale Mat...');
+        // Try to use Python if available, otherwise fall back to Electron
+        if (window.roiCapture) {
+          try {
+            // Ensure Python is started
+            if (!usePythonCapture) {
+              log('Python not started, initializing for template capture...');
+              const result = await window.roiCapture.start();
+              if (result.success) {
+                usePythonCapture = true;
+                log('✓ Python initialized for template capture');
+              } else {
+                throw new Error('Python start failed: ' + (result.error || 'Unknown error'));
+              }
+            }
+            
+            // Capture using Python (same as detection will use)
+            const scaleX = roiScreenWidth / roiPreviewWidth;
+            const scaleY = roiScreenHeight / roiPreviewHeight;
+            
+            const nativeROI = {
+              x: Math.floor(roi.x * scaleX),
+              y: Math.floor(roi.y * scaleY),
+              w: Math.floor(roi.w * scaleX),
+              h: Math.floor(roi.h * scaleY)
+            };
+            
+            log(`Capturing template via Python: native ${nativeROI.w}x${nativeROI.h} at (${nativeROI.x},${nativeROI.y}), resize to ${roi.w}x${roi.h}`);
+            
+            const result = await window.roiCapture.captureRegion({
+              monitor: 1,
+              x: nativeROI.x,
+              y: nativeROI.y,
+              width: nativeROI.w,
+              height: nativeROI.h,
+              resizeWidth: roi.w,
+              resizeHeight: roi.h
+            });
+            
+            if (!result || !result.success) {
+              throw new Error('Python template capture failed: ' + (result ? result.error : 'No result'));
+            }
+            
+            // Load Python image
+            const tempImg = new Image();
+            await new Promise((resolve, reject) => {
+              tempImg.onload = resolve;
+              tempImg.onerror = reject;
+              tempImg.src = 'data:image/png;base64,' + result.data;
+            });
+            
+            // Draw to canvas
+            const roiCanvas = document.createElement('canvas');
+            roiCanvas.width = roi.w;
+            roiCanvas.height = roi.h;
+            const roiCtx = roiCanvas.getContext('2d');
+            roiCtx.drawImage(tempImg, 0, 0);
+            imgData = roiCtx.getImageData(0, 0, roi.w, roi.h);
+            
+            log(`✓ Template captured via Python: ${tempImg.width}x${tempImg.height}`);
+          } catch (pythonErr) {
+            log('Python template capture failed, falling back to Electron: ' + pythonErr.message);
+            usePythonCapture = false; // Disable for this session
+            
+            // Fall through to Electron method below
+            const roiCanvas = document.createElement('canvas');
+            roiCanvas.width = roi.w;
+            roiCanvas.height = roi.h;
+            const roiCtx = roiCanvas.getContext('2d');
+            roiCtx.drawImage(thumbnailImage, roi.x, roi.y, roi.w, roi.h, 0, 0, roi.w, roi.h);
+            imgData = roiCtx.getImageData(0, 0, roi.w, roi.h);
+            
+            log(`✓ Template captured via Electron thumbnail (fallback)`);
+          }
+        } else {
+          // No Python available - use Electron thumbnail
+          const roiCanvas = document.createElement('canvas');
+          roiCanvas.width = roi.w;
+          roiCanvas.height = roi.h;
+          const roiCtx = roiCanvas.getContext('2d');
+          roiCtx.drawImage(thumbnailImage, roi.x, roi.y, roi.w, roi.h, 0, 0, roi.w, roi.h);
+          imgData = roiCtx.getImageData(0, 0, roi.w, roi.h);
+          
+          log(`✓ Template captured via Electron thumbnail (Python not available)`);
+        }
+        
         // Convert to grayscale OpenCV Mat
         let srcMat = cv.matFromImageData(imgData);
         let grayMat = new cv.Mat();
         cv.cvtColor(srcMat, grayMat, cv.COLOR_RGBA2GRAY);
         
+        // Resize if template is too large (max 400x400 for performance)
+        const MAX_TEMPLATE_SIZE = 400;
+        let finalTemplate = grayMat;
+        
+        if (grayMat.cols > MAX_TEMPLATE_SIZE || grayMat.rows > MAX_TEMPLATE_SIZE) {
+          const scale = Math.min(MAX_TEMPLATE_SIZE / grayMat.cols, MAX_TEMPLATE_SIZE / grayMat.rows);
+          const newWidth = Math.floor(grayMat.cols * scale);
+          const newHeight = Math.floor(grayMat.rows * scale);
+          
+          log(`Template too large (${grayMat.cols}x${grayMat.rows}), resizing to ${newWidth}x${newHeight} (scale=${scale.toFixed(3)})`);
+          
+          finalTemplate = new cv.Mat();
+          cv.resize(grayMat, finalTemplate, new cv.Size(newWidth, newHeight), 0, 0, cv.INTER_AREA);
+          grayMat.delete();
+          templateScale = scale; // Store scale for search image matching
+        } else {
+          templateScale = 1; // No scaling needed
+        }
+        
         // Replace template
         if (templateMat) {
-          log('Deleting old template');
           templateMat.delete();
         }
-        templateMat = grayMat;
+        templateMat = finalTemplate;
         tplReady = true;
         srcMat.delete();
         
         // Save template data to config
         const templateData = {
-          width: grayMat.cols,
-          height: grayMat.rows,
-          data: btoa(String.fromCharCode.apply(null, grayMat.data))
+          width: templateMat.cols,
+          height: templateMat.rows,
+          data: btoa(String.fromCharCode.apply(null, templateMat.data))
         };
         
         setBadge($('templateStatus'), 'Captured', 'success');
-        log(`✓ Template captured successfully: ${roi.w}x${roi.h} grayscale Mat`);
+        log(`✓ Template captured: ${templateMat.cols}x${templateMat.rows} grayscale Mat`);
         
-        // Save both ROI and template data
-        saveConfigPartial({ deathTemplate: { roi, templateData } });
+        // Save ROI and template with screen and preview dimensions
+        saveConfigPartial({ 
+          deathTemplate: { 
+            roi, 
+            templateData, 
+            screenWidth: roiScreenWidth, 
+            screenHeight: roiScreenHeight,
+            previewWidth: roiPreviewWidth,
+            previewHeight: roiPreviewHeight
+          } 
+        });
       } else {
-        log('ERROR: OpenCV still not ready after waitForCV()');
+        log('ERROR: OpenCV not ready');
         setBadge($('templateStatus'), 'OpenCV Not Ready', 'danger');
       }
     } catch (err) {
@@ -923,18 +1378,69 @@ $('selectROI').addEventListener('click', async () => {
       setBadge($('templateStatus'), 'Capture Failed', 'danger');
     }
     
-    roiTemplate = null; // reset legacy template
-    log(`ROI selected: ${roi.w}x${roi.h} at (${roi.x}, ${roi.y})`);
+    cleanup();
+    
+    // Draw ROI box on current preview immediately
+    ctx.strokeStyle = '#00ff88';
+    ctx.lineWidth = 4;
+    ctx.strokeRect(roi.x, roi.y, roi.w, roi.h);
+    ctx.fillStyle = '#00ff88';
+    ctx.font = 'bold 20px monospace';
+    const label = `ROI: ${roi.w}×${roi.h}`;
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+    ctx.fillRect(roi.x, roi.y - 30, 200, 25);
+    ctx.fillStyle = '#00ff88';
+    ctx.fillText(label, roi.x + 5, roi.y - 10);
   }
-
-  canvasEl.addEventListener('mousedown', onDown);
-  canvasEl.addEventListener('mousemove', onMove);
-  canvasEl.addEventListener('mouseup', onUp);
+  
+  function onKeyDown(e) {
+    if (e.key === 'Escape') {
+      log('ROI selection cancelled');
+      canvasEl.style.cursor = 'default';
+      ctx.drawImage(thumbnailImage, 0, 0);
+      cleanup();
+    }
+  }
+  
+  function cleanup() {
+    canvasEl.removeEventListener('mousedown', onMouseDown);
+    canvasEl.removeEventListener('mousemove', onMouseMove);
+    canvasEl.removeEventListener('mouseup', onMouseUp);
+    document.removeEventListener('keydown', onKeyDown);
+  }
+  
+  // Attach event listeners
+  canvasEl.addEventListener('mousedown', onMouseDown);
+  canvasEl.addEventListener('mousemove', onMouseMove);
+  canvasEl.addEventListener('mouseup', onMouseUp);
+  document.addEventListener('keydown', onKeyDown);
+  
+  log('✓ ROI selection mode active - click and drag on preview to select region (ESC to cancel)');
 });
 
 $('clearROI').addEventListener('click', () => {
-  roi = null; roiTemplate = null; roiStatusEl.textContent = 'No ROI set';
+  roi = null;
+  roiScreenWidth = 0;
+  roiScreenHeight = 0;
+  roiPreviewWidth = 0;
+  roiPreviewHeight = 0;
+  templateScale = 1;
+  roiStatusEl.textContent = 'No ROI set';
+  if (templateMat) {
+    templateMat.delete();
+    templateMat = null;
+  }
+  tplReady = false;
+  setBadge($('templateStatus'), 'Not Set', 'secondary');
   saveConfigPartial({ deathTemplate: null });
+  log('ROI and template cleared');
+  
+  // Update preview to show full screen again
+  fetchAndDisplayThumbnail().then(screen => {
+    if (screen) displayScreenSource(screen);
+  }).catch(err => {
+    log('Preview update error: ' + (err && err.message ? err.message : String(err)));
+  });
 });
 
 // Cleanup on window unload
@@ -946,15 +1452,6 @@ window.addEventListener('beforeunload', () => {
       templateMat = null;
     } catch (err) {
       console.error('Error cleaning up template mat:', err);
-    }
-  }
-  
-  // Stop media streams
-  if (mediaStream) {
-    try {
-      mediaStream.getTracks().forEach(t => t.stop());
-    } catch (err) {
-      console.error('Error stopping media stream:', err);
     }
   }
   
@@ -1002,6 +1499,15 @@ window.addEventListener('DOMContentLoaded', async () => {
     await populateMonitors();
   } catch (e) {
     log('Failed to populate monitors: ' + (e && e.message ? e.message : String(e)));
+  }
+  
+  // Fetch initial preview (full screen if no ROI, or with ROI overlay if set)
+  try {
+    const screen = await fetchAndDisplayThumbnail();
+    if (screen) await displayScreenSource(screen);
+    log('Initial preview loaded');
+  } catch (e) {
+    log('Failed to load initial preview: ' + (e && e.message ? e.message : String(e)));
   }
   
   try {

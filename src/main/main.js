@@ -2,6 +2,7 @@ const { app, BrowserWindow, ipcMain, globalShortcut, dialog, Menu, screen, Tray,
 const path = require('path');
 const Store = require('electron-store');
 const { ObsClient } = require('./obsClient');
+const ROICaptureManager = require('./roiCapture');
 
 const store = new Store({
   name: 'config',
@@ -20,6 +21,7 @@ let mainWindow;
 let tray = null;
 let obs = new ObsClient();
 let uiohook = null; // optional global keyboard hook
+let roiCapture = null; // Python ROI capture manager
 
 async function createWindow() {
   // Use PNG for window icon (better cross-platform, works in dev and production)
@@ -173,6 +175,41 @@ ipcMain.handle('desktop:getSources', async (_e, opts) => {
     console.error('desktopCapturer error:', err);
     return [];
   }
+});
+
+// IPC: Python ROI capture (fast region capture)
+ipcMain.handle('roi:startCapture', async () => {
+  try {
+    if (!roiCapture) {
+      roiCapture = new ROICaptureManager();
+      await roiCapture.start();
+    }
+    return { success: true };
+  } catch (err) {
+    console.error('Failed to start ROI capture:', err);
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('roi:captureRegion', async (_e, { monitor, x, y, width, height, resizeWidth, resizeHeight }) => {
+  try {
+    if (!roiCapture) {
+      throw new Error('ROI capture not started');
+    }
+    const result = await roiCapture.captureRegion(monitor, x, y, width, height, resizeWidth, resizeHeight);
+    return result;
+  } catch (err) {
+    console.error('ROI capture error:', err);
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('roi:stopCapture', async () => {
+  if (roiCapture) {
+    roiCapture.stop();
+    roiCapture = null;
+  }
+  return { success: true };
 });
 
 // IPC: OBS controls

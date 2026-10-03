@@ -25,6 +25,13 @@ contextBridge.exposeInMainWorld('desktop', {
   getSources: (opts) => ipcRenderer.invoke('desktop:getSources', opts || { types: ['screen', 'window'] })
 });
 
+// Fast ROI capture using Python
+contextBridge.exposeInMainWorld('roiCapture', {
+  start: () => ipcRenderer.invoke('roi:startCapture'),
+  captureRegion: (params) => ipcRenderer.invoke('roi:captureRegion', params),
+  stop: () => ipcRenderer.invoke('roi:stopCapture')
+});
+
 // Optional monitoring start/stop (for key hooks in main if enabled)
 contextBridge.exposeInMainWorld('monitor', {
   start: () => ipcRenderer.send('monitor:start'),
